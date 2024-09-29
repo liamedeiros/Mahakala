@@ -30,6 +30,7 @@ from jax.numpy.linalg import inv
 from jax.lib import xla_bridge
 print(xla_bridge.get_backend().platform)
 
+
 def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul, pixels_per_side, camera_type='grid'):
     '''
     @ Brief Return a list of photon positions and wavevectors over the image plane.
@@ -107,6 +108,30 @@ def metric(x, bhspin):
     f = (2.0 * rr * r)/(rr * rr + aa * zz)
     l = jnp.array([1, (r * x[1] + a * x[2])/(rr + aa) , (r* x[2] - a * x[1])/(rr + aa) , x[3]/r])
     return eta + f * (l[:,jnp.newaxis] * l[jnp.newaxis,:])
+
+
+def get_camera_pixel(inclination, distance, radius, angle):
+
+    z = jnp.ones(1)
+    x, y = jnp.meshgrid([radius], [angle], indexing='ij')
+
+    x = x.flatten()
+    y = y.flatten()
+
+    origin_BH = Image_to_BH(0, 0, 0, inclination, distance)
+    temp_coord = perpendicular([x, y])
+
+    init_BH = Image_to_BH(x, y, z, inclination, distance)
+    perp_BH = Image_to_BH(temp_coord[0], temp_coord[1], 0 * jnp.ones(1), inclination, distance)
+
+    vec1 = - init_BH.T + origin_BH
+    vec2 = perp_BH - init_BH
+
+    k_vec = jnp.cross(vec1, vec2.T)
+    s0_x = jnp.array([0 * jnp.ones(1), init_BH[0].flatten(), init_BH[1].flatten(), init_BH[2].flatten()])
+    s0_v = jnp.array([1 * jnp.ones(1), k_vec.T[0].flatten(), k_vec.T[1].flatten(), k_vec.T[2].flatten()])
+
+    return s0_x, s0_v
 
 
 def get_initial_grid(i,d,ll,ul,spacing, camera_type):
