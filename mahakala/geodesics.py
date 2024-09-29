@@ -113,7 +113,9 @@ def metric(x, bhspin):
 def get_camera_pixel(inclination, distance, radius, angle):
 
     z = jnp.ones(1)
-    x, y = jnp.meshgrid([radius], [angle], indexing='ij')
+    x = radius*np.cos(angle) # angle MUST be in radians
+    y = radius*np.sin(angle)
+    x, y = jnp.meshgrid(np.array([x]), np.array([y]), indexing='ij')
 
     x = x.flatten()
     y = y.flatten()
