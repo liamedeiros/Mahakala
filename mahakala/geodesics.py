@@ -257,8 +257,8 @@ def geodesic_integrator(N, s0,div,tol, bhspin, tqdm=False):
 
 def radius_cal(x, bhspin):
 
-    R = np.sqrt(x[:,1]**2 + x[:,2]**2 + x[:,3]**2)
-    r = np.sqrt((R**2 - bhspin**2  + np.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[:,3]**2)) / 2)
+    R = np.sqrt(x[...,1]**2 + x[...,2]**2 + x[...,3]**2)
+    r = np.sqrt((R**2 - bhspin**2  + np.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[...,3]**2)) / 2)
     return r
 
 
@@ -329,4 +329,37 @@ def imetric(x, bhspin):
 
 def radius_EH(a_spin):
     return 1 + np.sqrt(1-a_spin**2)
+
+
+def select_photons_integrator(N_time_steps, inc, angle, radius, bhspin, distance = 1000):
+    s0_x, s0_v = get_camera_pixel(inc,distance,radius,angle)
+    init_one   = initial_condition(s0_x, s0_v, bhspin)
+    S,final_dt = geodesic_integrator(N_time_steps,init_one,40,1e-2,bhspin)
+    r = radius_cal(S, bhspin)
+    return(np.nanmin(r, axis=0)) # returns minimum distance from BH
+
+
+def bisection_shadow_par(bhspin, inc, num_angles, N_time_steps=2000, uncertainty_allowed=0.001, max_it=40):
+    inner  = np.zeros(num_angles) + 0.5
+    outer  = np.zeros(num_angles) + 10
+    error  = outer - inner
+    angles = np.arange(num_angles)/num_angles*2.*np.pi
+    
+    reh = 1. + np.sqrt(1. - bhspin*bhspin)
+    reh = reh + 0.05
+    
+    counter = 0
+    while (np.max(error) > uncertainty_allowed) and (counter < max_it):
+        final_mid       = select_photons_integrator(N_time_steps, inc, angles, (outer-inner)/2+inner, bhspin)
+        fell            = np.where(final_mid < reh)
+        got_away        = np.where(final_mid > reh)
+        inner[fell]     = (outer[fell]-inner[fell])/2+inner[fell]
+        outer[got_away] = (outer[got_away]-inner[got_away])/2+inner[got_away]
+        error = outer - inner
+        counter+=1
+        
+    angles = np.append(angles, angles[0])
+    inner  = np.append(inner,   inner[0])
+
+    return(angles, inner)
 

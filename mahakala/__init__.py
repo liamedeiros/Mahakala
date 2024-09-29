@@ -21,9 +21,11 @@ THE SOFTWARE.
 
 from mahakala.geodesics import initialize_geodesics_at_camera
 from mahakala.geodesics import geodesic_integrator
+from mahakala.geodesics import bisection_shadow_par
 
 __all__ = [
     "initialize_geodesics_at_camera",
-    "geodesic_integrator"
+    "geodesic_integrator", 
+    "bisection_shadow_par"
 ]
 
