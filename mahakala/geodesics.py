@@ -1,4 +1,3 @@
-
 import numpy as np
 from tqdm import tqdm
 
@@ -10,39 +9,22 @@ from jax.numpy.linalg import inv
 from jax.lib import xla_bridge
 print(xla_bridge.get_backend().platform)
 
-def initialize_geodesics_at_camera(i,d,ll,ul,spacing,TYPE, bhspin):
+def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul, pixels_per_side, camera_type='grid'):
     '''
-    @ Brief This function generates an initial grid of photons that are then used for the geodesic integrator.
+    @ Brief Return a list of photon positions and wavevectors over the image plane.
 
-    @ dependencies: This function depends on the following functions,
-    Nullify(metric, p=1)
-        quadratic(A, b, C)
-        metric(x)
-
-    initial_grid(i,d,ll,ul,spacing,Type)
-        meshgrid
-        Image_to_BH(x,y,z,i,d)
-        perpendicular( a )
-
-    init_cond(s0_x,s0_v)
-        Nullify(metric, p=1)
-            quadratic(A, b, C)
-            metric(x)
-    '''
-    '''
-    Initilializes the image plane.
-
-    i - inclination (in degrees)
-    d - ditance of the image from the black hole (in code units)
+    bhspin - normalized black hole spin parameter
+    inclination - in degrees
+    distance - between the image and the coordinate origin (in GM/c^2)
     ll - lower limit of the image plane
     ul - upper limit of the image plane
-    spacing - number of photons between ul and ll
-    TYPE - it's either GRID (for 3-D visualization) or Equator (for photons along the equatorial cross-section)
+    pixels_per_side - linear resolution of the returned image array
+    camera_type - default=grid or equator (e.g., for studying cross sections)
     '''
 
-    s0_x, s0_v = initial_grid(i,d,ll,ul,spacing,TYPE)
+    s0_x, s0_v = get_initial_grid(inclination, distance, ll, ul, pixels_per_side, camera_type)
 
-    return init_cond(s0_x, s0_v, bhspin)
+    return initial_condition(s0_x, s0_v, bhspin)
 
 
 def Nullify(metric, bhspin, p=1):
@@ -106,7 +88,7 @@ def metric(x, bhspin):
     return eta + f * (l[:,jnp.newaxis] * l[jnp.newaxis,:])
 
 
-def initial_grid(i,d,ll,ul,spacing,Type):
+def get_initial_grid(i,d,ll,ul,spacing, camera_type):
     '''
     !@brief Defines the initial grid of photons that will be thrown towards the Black hole
 
@@ -123,9 +105,9 @@ def initial_grid(i,d,ll,ul,spacing,Type):
     @return s0_x,s0_v Where s0_x is array containing the position 4-vector of all the photons. s0_v contains the velocity 4-vector of all the photons
     '''
 
-    if Type == 'Grid':
+    if camera_type.lower() == 'grid':
 
-        grid_list = np.linspace(ll,ul,2 * spacing + 1)[1::2]
+        grid_list = np.linspace(ll, ul, 2 * spacing + 1)[1::2]
 
         z = 0 * jnp.ones(len(grid_list)**2)
 
@@ -140,8 +122,8 @@ def initial_grid(i,d,ll,ul,spacing,Type):
         init_BH = Image_to_BH(x,y,z,i,d)
         perp_BH = Image_to_BH(temp_coord[0],temp_coord[1],0 * jnp.ones(len(grid_list)**2),i,d)
 
-        vec1 = - (init_BH.T - origin_BH)
-        vec2 = (perp_BH - init_BH)
+        vec1 = - init_BH.T + origin_BH
+        vec2 = perp_BH - init_BH
 
         k_vec = np.cross(vec1,vec2.T)
         s0_x = np.array([0 * np.ones(len(grid_list)**2),init_BH[0].flatten(), init_BH[1].flatten(), init_BH[2].flatten()])
@@ -149,25 +131,23 @@ def initial_grid(i,d,ll,ul,spacing,Type):
 
         return s0_x,s0_v
 
-    elif Type == 'Equator':
-        grid_list = jnp.arange(ll,ul,spacing)
+    elif camera_type.lower() == 'equator':
+        grid_list = jnp.linspace(ll, ul, 2 * spacing + 1)[1::2]
 
-        s0 = jnp.zeros(8)
+        # initialize positions
+        s0_x = np.zeros((4, len(grid_list)))
+        s0_x[1] = d
+        s0_x[2] = grid_list
 
-        s0_x = np.zeros((4,len(grid_list)))
-
-        s0_x[1,:] = d
-        s0_x[2,:] = grid_list
-
+        # initialize wavevectors
         s0_v = np.ones((4,len(grid_list)))
+        s0_v[2] = 0
+        s0_v[3] = 0
 
-        s0_v[2,:] = 0
-        s0_v[3,:] = 0
-
-        return s0_x,s0_v
+        return s0_x, s0_v
 
     else:
-        pass
+        print(f'Unexpected camera type \"{camera_type}\". Please choose either "grid" or "equator"')
 
 
 def Image_to_BH(x,y,z,i,d):
@@ -185,7 +165,7 @@ def perpendicular( a ) :
     return b
 
 
-def init_cond(s0_x, s0_v, bhspin):
+def initial_condition(s0_x, s0_v, bhspin):
     '''
     !@breif This function returns the correct initial null goedesic conditions for the grid of photons
     '''
@@ -194,22 +174,21 @@ def init_cond(s0_x, s0_v, bhspin):
 
     s0 = []
     for i in range(len(s0_x.T)):
-        v = nullify(s0_x[:,i],s0_v[:,i])
-        s0.append(np.concatenate([s0_x[:,i],v]))
+        v = nullify(s0_x[:, i], s0_v[:, i])
+        s0.append(np.concatenate([s0_x[:, i], v]))
 
-    s0 = np.array(s0)
-    return s0
+    return np.array(s0)
 
 
-def geodesic_integrator(N,s0,div,tol, bhspin):
+def geodesic_integrator(N, s0,div,tol, bhspin):
     '''
     !@brief This function gets the Geodesic data and saves it in two arrays, X and V representing position and Velocity
     '''
     states1 = [s0]
-    #states2 = [photon_state]
     final_dt = []
+
     for i in tqdm(range(N)):
-        dt = -(radius_cal(states1[-1][:,:4], bhspin) - radius_EH(bhspin))/div
+        dt = -(radius_cal(states1[-1][:, :4], bhspin) - radius_EH(bhspin))/div
 
         imp_index = np.where((abs(dt) * div > 1500) | (abs(dt) < tol))
 
@@ -220,7 +199,6 @@ def geodesic_integrator(N,s0,div,tol, bhspin):
 
         result1 = RK4_gen(states1[-1],dt,bhspin)
         states1.append(result1)
-        #states2.append(result2)
         final_dt.append(dt)
 
     S = np.array(states1)
