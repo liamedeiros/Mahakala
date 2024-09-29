@@ -62,6 +62,6 @@ def emission_coefficient(Ne, t_electron, B, nu, beta, angle):
 
 def absorption_coefficient(t_electron, je, nu, Beta):
 
-    B_nu = (2*HPL*nu**3/c**2)/(pow(np.e,HPL*nu/(KB*t_electron)) - 1)
+    B_nu = (2*HPL*nu**3/CL**2)/(pow(np.e,HPL*nu/(KB*t_electron)) - 1)
 
     return je/B_nu
