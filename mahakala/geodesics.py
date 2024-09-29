@@ -112,13 +112,9 @@ def metric(x, bhspin):
 
 def get_camera_pixel(inclination, distance, radius, angle):
 
-    z = jnp.ones(1)
-    x = radius*np.cos(angle) # angle MUST be in radians
-    y = radius*np.sin(angle)
-    x, y = jnp.meshgrid(np.array([x]), np.array([y]), indexing='ij')
-
-    x = x.flatten()
-    y = y.flatten()
+    x = jnp.ones(1) * np.cos(angle) * radius  # angle MUST be in radians
+    y = jnp.ones(1) * np.sin(angle) * radius
+    z = jnp.ones(1) * 0.
 
     origin_BH = Image_to_BH(0, 0, 0, inclination, distance)
     temp_coord = perpendicular([x, y])
@@ -177,7 +173,7 @@ def get_initial_grid(i,d,ll,ul,spacing, camera_type):
         s0_x = np.array([0 * np.ones(len(grid_list)**2),init_BH[0].flatten(), init_BH[1].flatten(), init_BH[2].flatten()])
         s0_v = np.array([1 * np.ones(len(grid_list)**2),k_vec.T[0].flatten(), k_vec.T[1].flatten(), k_vec.T[2].flatten()])
 
-        return s0_x,s0_v
+        return s0_x, s0_v
 
     elif camera_type.lower() == 'equator':
         grid_list = jnp.linspace(ll, ul, 2 * spacing + 1)[1::2]
