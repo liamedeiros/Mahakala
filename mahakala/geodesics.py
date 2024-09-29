@@ -225,18 +225,18 @@ def initial_condition(s0_x, s0_v, bhspin):
     return np.array(s0)
 
 
-def geodesic_integrator(N, s0,div,tol, bhspin, tqdm=False):
+def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
     '''
     !@brief This function gets the Geodesic data and saves it in two arrays, X and V representing position and Velocity
     '''
     states1 = [s0]
     final_dt = []
 
-    if tqdm == True: iterator = tqdm(range(N))
+    if use_tqdm == True: iterator = tqdm(range(N))
     else: iterator = range(N)
 
     for i in iterator:
-    
+
         dt = -(radius_cal(states1[-1][:, :4], bhspin) - radius_EH(bhspin))/div
 
         imp_index = np.where((abs(dt) * div > 1500) | (abs(dt) * div < tol))
@@ -344,10 +344,10 @@ def bisection_shadow_par(bhspin, inc, num_angles, N_time_steps=2000, uncertainty
     outer  = np.zeros(num_angles) + 10
     error  = outer - inner
     angles = np.arange(num_angles)/num_angles*2.*np.pi
-    
+
     reh = 1. + np.sqrt(1. - bhspin*bhspin)
     reh = reh + 0.05
-    
+
     counter = 0
     while (np.max(error) > uncertainty_allowed) and (counter < max_it):
         final_mid       = select_photons_integrator(N_time_steps, inc, angles, (outer-inner)/2+inner, bhspin)
@@ -357,7 +357,7 @@ def bisection_shadow_par(bhspin, inc, num_angles, N_time_steps=2000, uncertainty
         outer[got_away] = (outer[got_away]-inner[got_away])/2+inner[got_away]
         error = outer - inner
         counter+=1
-        
+
     angles = np.append(angles, angles[0])
     inner  = np.append(inner,   inner[0])
 
