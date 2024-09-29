@@ -30,22 +30,34 @@ CL = 2.99792458e10
 ME = 9.1094e-28
 EC = 4.8032e-10
 HPL = 6.6261e-27
+GNEWT = 6.6743e-8
+
+
+def solve_specific_intensity(N, synemiss_data, absorption_data, nu, KuUu, dt, M_BH):
+    I_new = np.zeros(len(synemiss_data[0]))
+    I_list = np.zeros((N, 2048))
+    for i in range(N-1, 0, -1):
+        val =  (-(dt[i-1, :]) * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * I_new)))
+        I_new = I_new + val
+        I_list[N-i] = val
+    return I_new, I_list
 
 
 def emission_coefficient(Ne, t_electron, B, nu, beta, angle):
 
     thetae = (KB * t_electron)/( ME * CL**2)
 
-    nuc = 2.79925e6*B       # Eq [2]
+    # Eq [2]
+    nuc = 2.79925e6*B
     nus = (2./9.)*nuc*thetae*thetae*np.sin(angle)
 
-    X=nu/nus # Eq [56]
+    # Eq [56]
+    X=nu/nus
 
     var = np.exp(-np.power(X,1./3.))
-
     synemiss = Ne*nus*np.power(jnp.sqrt(X)+np.power(2., 11./12.)*np.power(X,1./6.),2.)/(special.kn(2,1./thetae))
-    return synemiss  * var * np.sqrt(2) * np.pi * e_c**2 /(3 * CL)
 
+    return synemiss  * var * np.sqrt(2) * np.pi * EC**2 /(3 * CL)
 
 
 def absorption_coefficient(t_electron, je, nu, Beta):
@@ -53,5 +65,3 @@ def absorption_coefficient(t_electron, je, nu, Beta):
     B_nu = (2*HPL*nu**3/c**2)/(pow(np.e,HPL*nu/(KB*t_electron)) - 1)
 
     return je/B_nu
-
-
