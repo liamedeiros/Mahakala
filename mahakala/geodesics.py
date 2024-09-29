@@ -1,5 +1,6 @@
 
 import numpy as np
+from tqdm import tqdm
 
 from jax import numpy as jnp
 from jax import jit, jacfwd, vmap
@@ -199,4 +200,106 @@ def init_cond(s0_x, s0_v, bhspin):
     s0 = np.array(s0)
     return s0
 
+
+def geodesic_integrator(N,s0,div,tol, bhspin):
+    '''
+    !@brief This function gets the Geodesic data and saves it in two arrays, X and V representing position and Velocity
+    '''
+    states1 = [s0]
+    #states2 = [photon_state]
+    final_dt = []
+    for i in tqdm(range(N)):
+        dt = -(radius_cal(states1[-1][:,:4], bhspin) - radius_EH(bhspin))/div
+                    
+        imp_index = np.where((abs(dt) * div > 1500) | (abs(dt) < tol))
+        
+        dt[imp_index] = 0.0
+        
+        if len(np.where(dt == 0)[0]) == len(dt):
+            break
+        
+        result1 = RK4_gen(states1[-1],dt,bhspin)
+        states1.append(result1)
+        #states2.append(result2)
+        final_dt.append(dt)
+       
+    S = np.array(states1) 
+
+    return S,np.array(final_dt) 
+
+
+def radius_cal(x, bhspin):
+    
+    R = np.sqrt(x[:,1]**2 + x[:,2]**2 + x[:,3]**2)
+    r = np.sqrt((R**2 - bhspin**2  + np.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[:,3]**2)) / 2)
+    return r
+
+
+@jit
+def RK4_gen(state1,dt,bhspin):
+    val = len(state1)
+    ans1 = vectorized_rhs(state1, bhspin)
+    
+    k1  = jnp.multiply(dt.reshape(val,1),ans1)
+    
+    ans1 = vectorized_rhs(state1 + 0.5 * k1, bhspin)
+    
+    k2  = jnp.multiply(dt.reshape(val,1),ans1)
+    
+    ans1 = vectorized_rhs(state1 + 0.5 * k2, bhspin)
+    
+    k3  = jnp.multiply(dt.reshape(val,1),ans1)
+    
+    ans1 = vectorized_rhs(state1 +  k3, bhspin)
+    
+    k4  = jnp.multiply(dt.reshape(val,1),ans1)
+    
+    new_state1 = state1 + 1/6 * (k1 + 2*k2 + 2*k3 + k4)  
+    return new_state1
+
+
+@jit
+def vectorized_rhs(s0, bhspin):
+    '''
+    !@brief This uses Jax vmap. It has the familiar semantics of mapping a function along array axes, but instead of 
+    keeping the loop on the outside, it pushes the loop down into a function’s primitive operations for better 
+    performance. When composed with jit(), it can be just as fast as adding the batch dimensions by hand.
+    '''
+    return vmap(rhs)(s0,bhspin)
+
+
+@jit
+def rhs(state1, bhspin):
+    
+    '''
+    !@brief Calculates the RHS of the Geodesic equation 
+    @param state An n * 8 dimensional array where n = number of photons, 8 = 8 = 4 position coordinates + 4 velocity coordinates
+    
+    @returns An n * 8 dimensional array where n = number of photons, 8 = 8 = 4 velocity coordinates + 4 acceleration coordinates
+    '''
+    
+    x  = state1[:4]
+    v  = state1[4:]
+    
+    ig = imetric(x, bhspin) 
+    jg = jit(jacfwd(metric))(x)
+    
+    a  = ig @ (- (jg @ v) @ v + 0.5 * v @ (v @ jg))
+    
+    return jnp.concatenate([v,a]) #a - a[0] * v
+
+
+@jit 
+def imetric(x, bhspin):
+    ''' 
+    !@brief Used by rhs()
+    @param x The 4 vector position
+    @returns The inverse of the metric at position x.  
+    
+    '''
+    return inv(metric(x, bhspin))
+
+
+def radius_EH(a_spin):
+    return 1 + np.sqrt(1-a_spin**2)
 

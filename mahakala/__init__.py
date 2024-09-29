@@ -21,8 +21,10 @@ THE SOFTWARE.
 
 
 from mahakala.geodesics import initialize_geodesics_at_camera
+from mahakala.geodesics import geodesic_integrator
 
 __all__ = [
     "initialize_geodesics_at_camera",
+    "geodesic_integrator"
 ]
 
