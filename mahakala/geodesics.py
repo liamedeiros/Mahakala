@@ -112,11 +112,12 @@ def metric(x, bhspin):
 
 def get_camera_pixel(inclination, distance, radius, angle):
 
-    x = jnp.ones(1) * np.cos(angle) * radius  # angle MUST be in radians
-    y = jnp.ones(1) * np.sin(angle) * radius
-    z = jnp.ones(1) * 0.
+    size = np.size(radius)
+    x = jnp.ones(size) * np.cos(angle) * radius  # angle MUST be in radians
+    y = jnp.ones(size) * np.sin(angle) * radius
+    z = jnp.ones(size) * 0.
 
-    origin_BH = Image_to_BH(0, 0, 0, inclination, distance)
+    origin_BH  = Image_to_BH(0, 0, 0, inclination, distance)
     temp_coord = perpendicular([x, y])
 
     init_BH = Image_to_BH(x, y, z, inclination, distance)
@@ -126,8 +127,8 @@ def get_camera_pixel(inclination, distance, radius, angle):
     vec2 = perp_BH - init_BH
 
     k_vec = jnp.cross(vec1, vec2.T)
-    s0_x = jnp.array([0 * jnp.ones(1), init_BH[0].flatten(), init_BH[1].flatten(), init_BH[2].flatten()])
-    s0_v = jnp.array([1 * jnp.ones(1), k_vec.T[0].flatten(), k_vec.T[1].flatten(), k_vec.T[2].flatten()])
+    s0_x  = jnp.array([0 * jnp.ones(size), init_BH[0].flatten(), init_BH[1].flatten(), init_BH[2].flatten()])
+    s0_v  = jnp.array([1 * jnp.ones(size), k_vec.T[0].flatten(), k_vec.T[1].flatten(), k_vec.T[2].flatten()])
 
     return s0_x, s0_v
 
@@ -224,17 +225,21 @@ def initial_condition(s0_x, s0_v, bhspin):
     return np.array(s0)
 
 
-def geodesic_integrator(N, s0,div,tol, bhspin):
+def geodesic_integrator(N, s0,div,tol, bhspin, tqdm=False):
     '''
     !@brief This function gets the Geodesic data and saves it in two arrays, X and V representing position and Velocity
     '''
     states1 = [s0]
     final_dt = []
 
-    for i in tqdm(range(N)):
+    if tqdm == True: iterator = tqdm(range(N))
+    else: iterator = range(N)
+
+    for i in iterator:
+    
         dt = -(radius_cal(states1[-1][:, :4], bhspin) - radius_EH(bhspin))/div
 
-        imp_index = np.where((abs(dt) * div > 1500) | (abs(dt) < tol))
+        imp_index = np.where((abs(dt) * div > 1500) | (abs(dt) * div < tol))
 
         dt[imp_index] = 0.0
 
@@ -247,7 +252,7 @@ def geodesic_integrator(N, s0,div,tol, bhspin):
 
     S = np.array(states1)
 
-    return S,np.array(final_dt)
+    return S, np.array(final_dt)
 
 
 def radius_cal(x, bhspin):
