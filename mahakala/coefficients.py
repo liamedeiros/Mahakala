@@ -19,11 +19,39 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-from mahakala.geodesics import initialize_geodesics_at_camera
-from mahakala.geodesics import geodesic_integrator
 
-__all__ = [
-    "initialize_geodesics_at_camera",
-    "geodesic_integrator"
-]
+import numpy as np
+from jax import numpy as jnp
+from scipy import special
+
+
+KB = 1.3807e-16
+CL = 2.99792458e10
+ME = 9.1094e-28
+EC = 4.8032e-10
+HPL = 6.6261e-27
+
+
+def emission_coefficient(Ne, t_electron, B, nu, beta, angle):
+
+    thetae = (KB * t_electron)/( ME * CL**2)
+
+    nuc = 2.79925e6*B       # Eq [2]
+    nus = (2./9.)*nuc*thetae*thetae*np.sin(angle)
+
+    X=nu/nus # Eq [56]
+
+    var = np.exp(-np.power(X,1./3.))
+
+    synemiss = Ne*nus*np.power(jnp.sqrt(X)+np.power(2., 11./12.)*np.power(X,1./6.),2.)/(special.kn(2,1./thetae))
+    return synemiss  * var * np.sqrt(2) * np.pi * e_c**2 /(3 * CL)
+
+
+
+def absorption_coefficient(t_electron, je, nu, Beta):
+
+    B_nu = (2*HPL*nu**3/c**2)/(pow(np.e,HPL*nu/(KB*t_electron)) - 1)
+
+    return je/B_nu
+
 
