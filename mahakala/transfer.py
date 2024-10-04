@@ -35,12 +35,12 @@ GNEWT = 6.6743e-8
 
 def solve_specific_intensity(N, synemiss_data, absorption_data, nu, KuUu, dt, M_BH):
     I_new = np.zeros(len(synemiss_data[0]))
-    I_list = np.zeros((N, 2048))
+    #I_list = np.zeros((N, 2048))
     for i in range(N-1, 0, -1):
         val =  (-(dt[i-1, :]) * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * I_new)))
         I_new = I_new + val
-        I_list[N-i] = val
-    return I_new, I_list
+        #I_list[N-i] = val
+    return I_new#, I_list
 
 
 def emission_coefficient(Ne, t_electron, B, nu, beta, angle):

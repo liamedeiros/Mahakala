@@ -27,11 +27,35 @@ from scipy.interpolate import RegularGridInterpolator
 
 from tqdm import tqdm
 
+from jax import numpy as jnp
+from jax import jit, jacfwd, vmap
+from jax.numpy import dot
+from jax.numpy.linalg import inv
+
+from mahakala.geodesics import metric, imetric
+
+
+KB = 1.3807e-16
+CL = 2.99792458e10
+ME = 9.1094e-28
+EC = 4.8032e-10
+HPL = 6.6261e-27
+GNEWT = 6.6743e-8
+
+
+@jit
+def vec_metric(X, bhspin):
+    return vmap(metric, in_axes=(0, None))(X, bhspin)
+
+@jit
+def vec_imetric(X, bhspin):
+    return vmap(imetric, in_axes=(0, None))(X, bhspin)
 
 class AthenakFluidModel:
 
-    def __init__(self, grmhd_filename):
+    def __init__(self, grmhd_filename, bhspin):
         self.load_athenak_meshblocks(grmhd_filename)
+        self.bhspin = bhspin
 
 
     def map_prim_to_prim(self, remapped, nprm, variable_names, fluid_params):
@@ -500,6 +524,64 @@ class AthenakFluidModel:
 
         return new_meshblock
 
+    """
+    @jit
+    def another_metric(self, x):
+        eta = jnp.asarray([[1,0,0],[0,1,0],[0,0,1]])
+        a = self.bhspin
+        aa = a * a
+        zz = x[3]*x[3]
+        kk = 0.5 * (x[1]*x[1] + x[2]*x[2] + zz - aa)
+        rr = jnp.sqrt(kk * kk + aa * zz ) + kk
+        r = jnp.sqrt(rr)
+        f = (2.0 * rr * r)/(rr * rr + aa * zz)
+        l = jnp.array([(r * x[1] + a * x[2])/(rr + aa) , (r* x[2] - a * x[1])/(rr + aa) , x[3]/r])
+        return eta + f * (l[:,jnp.newaxis] * l[jnp.newaxis,:])
+
+    @jit
+    def vec_another_metric(self, X):
+        return vmap(self.another_metric)(X)
+        """
+
+    """
+    @jit
+    def metric(x):
+        '''
+        !@brief Calculates the Kerr-schild metric in Cartesian Co-ordinates.
+        @param x 1-D jax array with 4 elements corresponding to {t,x,y,z} which is equivalent to 4-position vector
+        @returns a 4 X 4 two dimensional array reprenting the metric
+
+        '''
+        eta = jnp.asarray([[-1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+        a = a_spin
+        aa = a * a
+        zz = x[3]*x[3]
+        kk = 0.5 * (x[1]*x[1] + x[2]*x[2] + zz - aa)
+        rr = jnp.sqrt(kk * kk + aa * zz ) + kk
+        r = jnp.sqrt(rr)
+        f = (2.0 * rr * r)/(rr * rr + aa * zz)
+        l = jnp.array([1, (r * x[1] + a * x[2])/(rr + aa) , (r* x[2] - a * x[1])/(rr + aa) , x[3]/r])
+        return eta + f * (l[:,jnp.newaxis] * l[jnp.newaxis,:])
+
+    @jit
+    def imetric(self, x):
+        '''
+        !@brief Used by rhs()
+        @param x The 4 vector position
+        @returns The inverse of the metric at position x.
+
+        '''
+        return inv(self.metric(x))
+
+    @jit
+    def vec_metric(self, X):
+        return vmap(self.metric)(X)
+
+    @jit
+    def vec_imetric(self, X):
+        return vmap(self.imetric)(X)
+        """
+
     def get_prims_from_geodesics(self, S, interp_method='linear', fluid_gamma=13./9):
 
         fluid_params = dict(fluid_gamma=fluid_gamma)
@@ -572,3 +654,123 @@ class AthenakFluidModel:
 
         del prims
         del populated
+
+        primitive_data = dict(
+            dens=densff_data,
+            u=internal_u_data,
+            U1=U_1_data,
+            U2=U_2_data,
+            U3=U_3_data,
+            B1=B_1_data,
+            B2=B_2_data,
+            B3=B_3_data
+        )
+
+        return primitive_data
+
+    def compute_tensorial(self, S, primitive_data):
+
+        nsteps, npx, _ = S.shape
+
+        UuUu = np.zeros((nsteps, npx))
+
+        total_u = np.array([primitive_data['U1'], primitive_data['U2'], primitive_data['U3']])
+        total_u = np.transpose(total_u, (1,2,0))
+
+        for i in tqdm(range(nsteps)):
+            UuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin)[:,1:,1:] @ total_u[i,:,:].reshape(npx,3,1)).reshape(npx,1,3) @ total_u[i,:,:].reshape(npx,3,1)).reshape(npx)
+        del total_u
+
+        GAMMA = np.sqrt(1 + UuUu)
+        del UuUu
+
+        final_M = np.zeros((nsteps, npx, 4))
+        for i in tqdm(range(0, nsteps)):
+            final_M[i,:,:] = vec_imetric(S[i,:,:4], self.bhspin)[:,0,:]
+
+        u0_data = (GAMMA/pow(-final_M[:,:,0], -1/2))
+        u1_data = (primitive_data['U1'] - (final_M[:,:,1] * GAMMA * pow(-final_M[:,:,0],-1/2)))
+        u2_data = (primitive_data['U2'] - (final_M[:,:,2] * GAMMA * pow(-final_M[:,:,0],-1/2)))
+        u3_data = (primitive_data['U3'] - (final_M[:,:,3] * GAMMA * pow(-final_M[:,:,0],-1/2)))
+
+        del final_M
+
+
+        #######################
+        # Now, for the magnetic field components
+
+        BuUu = np.zeros((nsteps, npx))
+
+        total_B = np.array([primitive_data['B1'], primitive_data['B2'], primitive_data['B3']])
+        total_B = np.transpose(total_B, (1, 2, 0))
+
+        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
+        total_u = np.transpose(total_u, (1, 2, 0))
+
+        for i in tqdm(range(nsteps)):
+            BuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4)[:,:,1:] @ total_B[i,:,:].reshape(npx,3,1)).reshape(npx)
+
+        del total_B
+
+        B0_data = BuUu
+        del BuUu
+        B1_data = 1/u0_data * (primitive_data['B1'] + B0_data * u1_data)
+        B2_data = 1/u0_data * (primitive_data['B2'] + B0_data * u2_data)
+        B3_data = 1/u0_data * (primitive_data['B3'] + B0_data * u3_data)
+
+        KuUu = np.zeros((nsteps, npx))
+
+        for i in tqdm(range(nsteps)):
+            KuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ S[i,:,4:].reshape(npx,4,1)).reshape(npx)
+
+        total_B = np.array([B0_data, B1_data, B2_data, B3_data])
+        tot_B = np.transpose(total_B, (1,2,0))
+
+        KuBu = np.zeros((nsteps, npx))
+
+        for i in tqdm(range(nsteps)):
+            KuBu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ S[i,:,4:].reshape(npx,4,1)).reshape(npx)
+
+        BuBu = np.zeros((nsteps, npx))
+
+        for i in tqdm(range(nsteps)):
+            BuBu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx)
+
+        del tot_B
+        del total_B
+
+        ## TODO remove UdotU
+        UuUu = np.zeros((nsteps, npx))
+
+        del total_u
+        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
+        tot_u = np.transpose(total_u, (1, 2, 0))
+
+        for i in tqdm(range(nsteps)):
+            UuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ tot_u[i,:,:].reshape(npx,4,1)).reshape(npx)
+
+        def compute_pitch_angle(KuUu, KuBu, BuBu):
+
+            angle = KuBu/(np.abs(KuUu) * np.sqrt(BuBu))
+
+            index = np.where(BuBu == 0)
+            angle[index[0],index[1]] = np.cos(np.pi/2)
+
+            index = np.where(abs(angle) > 1.0)
+            angle[index[0],index[1]] = angle[index[0],index[1]]/abs(angle[index[0],index[1]])
+
+            return np.arccos(angle)
+
+        observer_angle = compute_pitch_angle(KuUu,KuBu,BuBu)
+
+        tensorial_data = dict(
+            ucon = np.array([u0_data, u1_data, u2_data, u3_data]),
+            bcon = np.array([B0_data, B1_data, B2_data, B3_data]),
+            pitch_angle = observer_angle,
+            udotu = UuUu,
+            kdotu = KuUu,
+            kdotb = KuBu,
+            bdotb = BuBu
+        )
+
+        return tensorial_data
