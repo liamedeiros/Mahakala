@@ -228,6 +228,7 @@ def initial_condition(s0_x, s0_v, bhspin):
 def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
     '''
     !@brief This function gets the Geodesic data and saves it in two arrays, X and V representing position and Velocity
+    TODO: fix description (currently inaccurate)
     '''
     states1 = [s0]
     final_dt = []
@@ -246,13 +247,43 @@ def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
         if len(np.where(dt == 0)[0]) == len(dt):
             break
 
-        result1 = RK4_gen(states1[-1],dt,bhspin)
+        result1 = RK4_gen(states1[-1], dt, bhspin)
         states1.append(result1)
         final_dt.append(dt)
 
-    S = np.array(states1)
+        if np.isnan(np.min(result1)) and False:
+            print(i)
+            for j in range(len(states1[-2])):
+                if np.isnan(result1[j]).any():
+                    print(j)
+                    print('state')
+                    print(states1[-2][j])
+                    print('dt')
+                    print(dt[j])
+                    print('result1')
+                    print(result1[j])
+                    """
+            print('states')
+            print(states1[-2])
+            print('dt')
+            print(dt)
+            print('result1')
+            print(result1)
+            """
+            break
 
-    return S, np.array(final_dt)
+    S = np.array(states1)
+    final_dt = np.array(final_dt)
+
+    # set every "last" non-zero dt to be zero
+    npx = final_dt.shape[1]
+    for i in range(npx):
+        final_dt[:, i][np.isnan(final_dt[:, i])] = 0
+        idx = np.argmax(final_dt[:, i] == 0)
+        final_dt[idx-1:, i] = 0.
+        S[idx-1:, i] = S[idx-1, i]
+
+    return S, final_dt
 
 
 def radius_cal(x, bhspin):
@@ -265,6 +296,7 @@ def radius_cal(x, bhspin):
 
 @jit
 def RK4_gen(state1,dt,bhspin):
+
     val = len(state1)
     ans1 = vectorized_rhs(state1, bhspin)
 
