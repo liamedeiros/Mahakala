@@ -24,7 +24,7 @@ import numpy as np
 from jax import numpy as jnp
 from scipy import special
 
-from jax import jit
+from jax import jit, lax
 
 
 KB = 1.3807e-16
@@ -34,15 +34,39 @@ EC = 4.8032e-10
 HPL = 6.6261e-27
 GNEWT = 6.6743e-8
 
-@jit
-def solve_specific_intensity(N, synemiss_data, absorption_data, nu, KuUu, dt, M_BH):
-    I_new = np.zeros(len(synemiss_data[0]))
-    #I_list = np.zeros((N, 2048))
-    for i in range(N-1, 0, -1):
+#@jit
+def solve_specific_intensity(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
+    I_new = np.zeros(synemiss_data.shape[1])
+    range_values = jnp.array(range(N-1, 0, -1))
+    for i in range_values:
         val = (-(dt[i-1, :]) * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * I_new)))
         I_new = I_new + val
     return np.array(I_new)
 
+
+def solve_specific_intensity_new2(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
+    range_values = np.arange(N-1, 0, -1)
+    val = -(dt[range_values-1, :] * (GNEWT*M_BH/CL**2) * (synemiss_data[range_values, :]/np.abs(KuUu[range_values, :])**2 - (np.abs(KuUu)[range_values, :] * absorption_data[range_values, :] * np.cumsum(val, axis=0))))
+    I_new = np.sum(val, axis=0)
+    return np.array(I_new)
+
+def solve_specific_intensity_new(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
+    I_new = np.zeros(synemiss_data.shape[1])
+    for i in range(N-1, 0, -1):
+        val = -(dt[i-1, :] * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * I_new)))
+        I_new += val
+    return np.array(I_new)
+
+@jit
+def solve_specific_intensity_jax(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
+    
+    def body_func(carry, i):
+        val = (-(dt[i-1, :]) * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * carry)))
+        return carry + val, None
+
+    I_new, _ = lax.scan(body_func, jnp.zeros(synemiss_data.shape[1]), jnp.arange(N-1, 0, -1))
+
+    return I_new
 
 def emission_coefficient(Ne, t_electron, B, nu, beta, angle):
 
