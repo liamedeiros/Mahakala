@@ -256,10 +256,11 @@ def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
 
 
 def radius_cal(x, bhspin):
-
-    R = np.sqrt(x[...,1]**2 + x[...,2]**2 + x[...,3]**2)
-    r = np.sqrt((R**2 - bhspin**2  + np.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[...,3]**2)) / 2)
-    return r
+    '''
+    !@brief Returns the Spherical Kerr-Schild radius for a point expressed in Cartesian Kerr-Schild coordinates.
+    '''
+    R = np.sqrt(x[..., 1]**2 + x[..., 2]**2 + x[..., 3]**2)
+    return np.sqrt((R**2 - bhspin**2  + np.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[...,3]**2)) / 2)
 
 
 @jit
@@ -287,17 +288,11 @@ def RK4_gen(state1,dt,bhspin):
 
 @jit
 def vectorized_rhs(s0, bhspin):
-    '''
-    !@brief This uses Jax vmap. It has the familiar semantics of mapping a function along array axes, but instead of
-    keeping the loop on the outside, it pushes the loop down into a function’s primitive operations for better
-    performance. When composed with jit(), it can be just as fast as adding the batch dimensions by hand.
-    '''
     return vmap(rhs, in_axes=(0, None))(s0,bhspin)
 
 
 @jit
 def rhs(state1, bhspin):
-
     '''
     !@brief Calculates the RHS of the Geodesic equation
     @param state An n * 8 dimensional array where n = number of photons, 8 = 8 = 4 position coordinates + 4 velocity coordinates

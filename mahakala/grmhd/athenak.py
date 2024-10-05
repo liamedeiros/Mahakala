@@ -685,7 +685,7 @@ class AthenakFluidModel:
         del UuUu
 
         final_M = np.zeros((nsteps, npx, 4))
-        for i in tqdm(range(0, nsteps)):
+        for i in tqdm(range(nsteps)):
             final_M[i,:,:] = vec_imetric(S[i,:,:4], self.bhspin)[:,0,:]
 
         u0_data = (GAMMA/pow(-final_M[:,:,0], -1/2))
@@ -694,7 +694,6 @@ class AthenakFluidModel:
         u3_data = (primitive_data['U3'] - (final_M[:,:,3] * GAMMA * pow(-final_M[:,:,0],-1/2)))
 
         del final_M
-
 
         #######################
         # Now, for the magnetic field components
