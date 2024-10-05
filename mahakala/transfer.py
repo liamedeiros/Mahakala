@@ -24,6 +24,8 @@ import numpy as np
 from jax import numpy as jnp
 from scipy import special
 
+from jax import jit
+
 
 KB = 1.3807e-16
 CL = 2.99792458e10
@@ -32,12 +34,12 @@ EC = 4.8032e-10
 HPL = 6.6261e-27
 GNEWT = 6.6743e-8
 
-
+@jit
 def solve_specific_intensity(N, synemiss_data, absorption_data, nu, KuUu, dt, M_BH):
     I_new = np.zeros(len(synemiss_data[0]))
     #I_list = np.zeros((N, 2048))
     for i in range(N-1, 0, -1):
-        val =  (-(dt[i-1, :]) * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * I_new)))
+        val = (-(dt[i-1, :]) * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * I_new)))
         I_new = I_new + val
     return np.array(I_new)
 

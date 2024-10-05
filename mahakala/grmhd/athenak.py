@@ -24,6 +24,7 @@ import numpy as np
 import h5py
 
 from scipy.interpolate import RegularGridInterpolator
+from jax.scipy.interpolate import RegularGridInterpolator as jaxRegularGridInterpolator
 
 from tqdm import tqdm
 
@@ -31,6 +32,8 @@ from jax import numpy as jnp
 from jax import jit, jacfwd, vmap
 from jax.numpy import dot
 from jax.numpy.linalg import inv
+
+import time
 
 from mahakala.geodesics import metric, imetric
 
@@ -543,45 +546,6 @@ class AthenakFluidModel:
         return vmap(self.another_metric)(X)
         """
 
-    """
-    @jit
-    def metric(x):
-        '''
-        !@brief Calculates the Kerr-schild metric in Cartesian Co-ordinates.
-        @param x 1-D jax array with 4 elements corresponding to {t,x,y,z} which is equivalent to 4-position vector
-        @returns a 4 X 4 two dimensional array reprenting the metric
-
-        '''
-        eta = jnp.asarray([[-1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
-        a = a_spin
-        aa = a * a
-        zz = x[3]*x[3]
-        kk = 0.5 * (x[1]*x[1] + x[2]*x[2] + zz - aa)
-        rr = jnp.sqrt(kk * kk + aa * zz ) + kk
-        r = jnp.sqrt(rr)
-        f = (2.0 * rr * r)/(rr * rr + aa * zz)
-        l = jnp.array([1, (r * x[1] + a * x[2])/(rr + aa) , (r* x[2] - a * x[1])/(rr + aa) , x[3]/r])
-        return eta + f * (l[:,jnp.newaxis] * l[jnp.newaxis,:])
-
-    @jit
-    def imetric(self, x):
-        '''
-        !@brief Used by rhs()
-        @param x The 4 vector position
-        @returns The inverse of the metric at position x.
-
-        '''
-        return inv(self.metric(x))
-
-    @jit
-    def vec_metric(self, X):
-        return vmap(self.metric)(X)
-
-    @jit
-    def vec_imetric(self, X):
-        return vmap(self.imetric)(X)
-        """
-
     def get_prims_from_geodesics(self, S, interp_method='linear', fluid_gamma=13./9):
 
         fluid_params = dict(fluid_gamma=fluid_gamma)
@@ -609,39 +573,42 @@ class AthenakFluidModel:
             mb_x3min = self.x3f[mbi].min()
             mb_x3max = self.x3f[mbi].max()
 
-            mb_mask = (mb_x1min < S[:,:,1]) & (S[:,:,1] <= mb_x1max)
-            mb_mask &= (mb_x2min < S[:,:,2]) & (S[:,:,2] <= mb_x2max)
-            mb_mask &= (mb_x3min < S[:,:,3]) & (S[:,:,3] <= mb_x3max)
+            mb_mask = (mb_x1min < S[..., 1]) & (S[..., 1] <= mb_x1max)
+            mb_mask &= (mb_x2min < S[..., 2]) & (S[..., 2] <= mb_x2max)
+            mb_mask &= (mb_x3min < S[..., 3]) & (S[..., 3] <= mb_x3max)
             mb_mask &= (populated == 0)
 
             x1e = self.get_extended(self.x1v[mbi])
             x2e = self.get_extended(self.x2v[mbi])
             x3e = self.get_extended(self.x3v[mbi])
 
-            # get meshblock key information
-            tlevel = self.Levels[mbi]
-            ti, tj, tk = self.LogicalLocations[mbi]
-            key = tlevel, ti, tj, tk
+            ebounds = jnp.array([x1e, x2e, x3e])
 
             if np.count_nonzero(mb_mask) == 0:
                 continue
 
-
             # create and use the interpolation object
             for nprm in range(self.nprim_all):
-                prm = self.all_meshblocks[mbi,nprm, :, :, :]
-                rgi = RegularGridInterpolator((x1e, x2e, x3e), prm.transpose((2,1,0)),
-                                                method=interp_method)
+                t0 = time.time()
+                prm = self.all_meshblocks[mbi, nprm, :, :, :]
+                t1 = time.time()
+                #rgi = jaxRegularGridInterpolator((x1e, x2e, x3e), prm.transpose((2, 1, 0)),
+                #                               method=interp_method)
+                rgi = jaxRegularGridInterpolator(ebounds, prm.transpose((2, 1, 0)),
+                                                 method=interp_method)
 
-                remapped = rgi((S[:,:,1][mb_mask], S[:,:,2][mb_mask], S[:,:,3][mb_mask]))
+                t2 = time.time()
+                remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## expensive
+                t3 = time.time()
                 outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+                t4 = time.time()
 
-                prims[mb_mask, outidx] = outval
+                prims[mb_mask, outidx] = outval  ## expensive??
+                t5 = time.time()
 
-            # ensure we don't accidentally overwrite already-populated
-            # cells (precision issues?)
+                #print(mbi, nprm, t1-t0, t2-t1, t3-t2, t4-t3, t5-t4)
+
             populated[mb_mask] = 1
-
 
         densff_data     = prims[..., 0]
         internal_u_data = prims[..., 1]

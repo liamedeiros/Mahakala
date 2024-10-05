@@ -57,7 +57,6 @@ def Nullify(metric, bhspin, p=1):
     assert p > 0
 
     @jit
-
     def nullify(x, v): # closure on `p`
 
         g = metric(x, bhspin)
