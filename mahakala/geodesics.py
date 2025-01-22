@@ -23,12 +23,17 @@ import numpy as np
 from tqdm import tqdm
 
 from jax import numpy as jnp
-from jax import jit, jacfwd, vmap
+from jax import jit, jacfwd, vmap, lax
 from jax.numpy import dot
 from jax.numpy.linalg import inv
 ##### This will tell whether we are using CPU or GPU #########
 from jax.lib import xla_bridge
 print(xla_bridge.get_backend().platform)
+
+import jax
+jax.config.update("jax_disable_jit", True)
+
+from jax.debug import print as jaxprint
 
 
 def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul, pixels_per_side, camera_type='grid'):
@@ -228,8 +233,6 @@ def initial_condition_old(s0_x, s0_v, bhspin):
 
     return np.array(s0)
 
-#import jax.numpy as jnp
-#from jax import vmap
 
 def initial_condition(s0_x, s0_v, bhspin):
     '''
@@ -239,12 +242,70 @@ def initial_condition(s0_x, s0_v, bhspin):
 
     def concatenate_func(x_col, v_col):
         return jnp.concatenate([x_col, nullify(x_col, v_col)])
-    
+
     s0 = vmap(concatenate_func, in_axes=(1, 1))(s0_x, s0_v)
     return s0
 
 
-def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
+def geodesic_integrator_new(N, s0, div, tol, bhspin):
+    '''
+    JAX implementation of the geodesic integrator.
+    '''
+
+    states1 = jnp.zeros((N + 1, s0.shape[0], s0.shape[1]))
+    final_dt = jnp.zeros((N, s0.shape[0]))
+    states1 = states1.at[0, :, :].set(s0)
+
+    #print(states1.shape)
+    #print(s0.shape)
+
+    def body_fn(carry, i):
+        states, final_dt, idx = carry
+
+        #jaxprint(states[idx - 1], idx)
+        #print(states[idx - 1])
+        #jaxprint(f"{idx}")  #, final_dt, idx)
+
+        dt = -(radius_cal(states[idx - 1][:, :4], bhspin) - radius_EH(bhspin)) / div
+        condition = jnp.logical_or(jnp.abs(dt) * div > 1500, jnp.abs(dt) * div < tol)
+        dt = lax.select(condition, jnp.zeros_like(dt), dt)
+
+        new_state = RK4_gen(states[idx - 1], dt, bhspin)  # BOGUE: is idx-1 correct?
+
+        # Store values at fixed index position to maintain shape consistency
+        states = states.at[idx].set(new_state)
+        final_dt = final_dt.at[idx - 1].set(dt)
+
+        return (states, final_dt, idx + 1), None
+
+    # Run scan with preallocated arrays
+    (states1, final_dt, _), _ = lax.scan(body_fn, (states1, final_dt, 1), jnp.arange(N))
+
+    print('c')
+
+    """
+    # Post-processing: Replace NaNs and handle last non-zero dt
+    def post_process(final_dt, S):
+        final_dt = jnp.where(jnp.isnan(final_dt), 0.0, final_dt)
+
+        def set_last_zero(carry, i):
+            fd, S_ = carry
+            idx = jnp.argmax(fd[:, i] == 0)
+            fd = fd.at[idx-1:, i].set(0.0)
+            S_ = S_.at[idx-1:, i].set(S_[idx-1, i])
+            return (fd, S_), None
+
+        (final_dt, S), _ = lax.scan(set_last_zero, (final_dt, final_states), jnp.arange(final_dt.shape[1]))
+
+        return S, final_dt
+
+    final_states, final_dt = post_process(final_dt, states1)
+    """
+
+    return states1, final_dt
+
+
+def geodesic_integrator_old(N, s0, div, tol, bhspin, use_tqdm=False):
     '''
     !@brief This function gets the Geodesic data and saves it in two arrays, X and V representing position and Velocity
     TODO: fix description (currently inaccurate)
@@ -252,12 +313,17 @@ def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
     states1 = [s0]
     final_dt = []
 
-    if use_tqdm == True: iterator = tqdm(range(N))
-    else: iterator = range(N)
+    print(states1)
+    print(s0.shape)
+
+    if use_tqdm:
+        iterator = tqdm(range(N))
+    else:
+        iterator = range(N)
 
     for i in iterator:
 
-        dt = -(radius_cal(states1[-1][:, :4], bhspin) - radius_EH(bhspin))/div
+        dt = -(radius_cal_old(states1[-1][:, :4], bhspin) - radius_EH(bhspin))/div
 
         imp_index = np.where((abs(dt) * div > 1500) | (abs(dt) * div < tol))
 
@@ -269,6 +335,12 @@ def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
         result1 = RK4_gen(states1[-1], dt, bhspin)
         states1.append(result1)
         final_dt.append(dt)
+
+        #print(states1[:3], result1[:3], dt[:3], i)
+
+        # BOGUE REMOVE (DEBUGGING!)
+        #print(dt.shape)
+        #print(np.array(final_dt).shape)
 
         if np.isnan(np.min(result1)) and False:
             print(i)
@@ -305,12 +377,20 @@ def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
     return S, final_dt
 
 
-def radius_cal(x, bhspin):
+def radius_cal_old(x, bhspin):
     '''
     !@brief Returns the Spherical Kerr-Schild radius for a point expressed in Cartesian Kerr-Schild coordinates.
     '''
     R = np.sqrt(x[..., 1]**2 + x[..., 2]**2 + x[..., 3]**2)
-    return np.sqrt((R**2 - bhspin**2  + np.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[...,3]**2)) / 2)
+    return np.sqrt((R**2 - bhspin**2 + np.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[..., 3]**2)) / 2)
+
+
+def radius_cal(x, bhspin):
+    '''
+    !@brief Returns the Spherical Kerr-Schild radius for a point expressed in Cartesian Kerr-Schild coordinates.
+    '''
+    R = jnp.sqrt(x[..., 1]**2 + x[..., 2]**2 + x[..., 3]**2)
+    return jnp.sqrt((R**2 - bhspin**2 + jnp.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[..., 3]**2)) / 2)
 
 
 @jit
