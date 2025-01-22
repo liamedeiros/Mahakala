@@ -208,20 +208,40 @@ def perpendicular( a ) :
     b[1] = (0-a[0]) + a[1]
     return b
 
-
-def initial_condition(s0_x, s0_v, bhspin):
+#@jit
+def initial_condition_old(s0_x, s0_v, bhspin):
     '''
-    !@breif This function returns the correct initial null goedesic conditions for the grid of photons
+    !@brief This function returns the correct initial null goedesic conditions for the grid of photons
     '''
 
+    import time
+    #print('a', time.time())
     nullify = Nullify(metric, bhspin)
+
+    #print('b', time.time())
 
     s0 = []
     for i in range(len(s0_x.T)):
-        v = nullify(s0_x[:, i], s0_v[:, i])
-        s0.append(np.concatenate([s0_x[:, i], v]))
+        s0.append(np.concatenate([s0_x[:, i], nullify(s0_x[:, i], s0_v[:, i])]))
+
+    #print('c', time.time())
 
     return np.array(s0)
+
+#import jax.numpy as jnp
+#from jax import vmap
+
+def initial_condition(s0_x, s0_v, bhspin):
+    '''
+    !@brief This function returns the correct initial null geodesic conditions for the grid of photons
+    '''
+    nullify = Nullify(metric, bhspin)
+
+    def concatenate_func(x_col, v_col):
+        return jnp.concatenate([x_col, nullify(x_col, v_col)])
+    
+    s0 = vmap(concatenate_func, in_axes=(1, 1))(s0_x, s0_v)
+    return s0
 
 
 def geodesic_integrator(N, s0,div,tol, bhspin, use_tqdm=False):
