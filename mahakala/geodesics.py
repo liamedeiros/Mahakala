@@ -31,7 +31,7 @@ from jax.lib import xla_bridge
 print(xla_bridge.get_backend().platform)
 
 import jax
-jax.config.update("jax_disable_jit", True)
+#jax.config.update("jax_disable_jit", True)
 
 from jax.debug import print as jaxprint
 
@@ -283,24 +283,19 @@ def geodesic_integrator_new(N, s0, div, tol, bhspin):
 
     print('c')
 
-    """
-    # Post-processing: Replace NaNs and handle last non-zero dt
-    def post_process(final_dt, S):
-        final_dt = jnp.where(jnp.isnan(final_dt), 0.0, final_dt)
+    states1 = np.array(states1)
+    final_dt = np.array(final_dt)
 
-        def set_last_zero(carry, i):
-            fd, S_ = carry
-            idx = jnp.argmax(fd[:, i] == 0)
-            fd = fd.at[idx-1:, i].set(0.0)
-            S_ = S_.at[idx-1:, i].set(S_[idx-1, i])
-            return (fd, S_), None
+    # BOGUE: make this use the jnp arrays and be parallelized using jax
+    # set every "last" non-zero dt to be zero
+    npx = final_dt.shape[1]
+    for i in range(npx):
+        final_dt[:, i][np.isnan(final_dt[:, i])] = 0
+        idx = np.argmax(final_dt[:, i] == 0)
+        final_dt[idx-1:, i] = 0.
+        states1[idx-1:, i] = states1[idx-1, i]
 
-        (final_dt, S), _ = lax.scan(set_last_zero, (final_dt, final_states), jnp.arange(final_dt.shape[1]))
-
-        return S, final_dt
-
-    final_states, final_dt = post_process(final_dt, states1)
-    """
+    print('d')
 
     return states1, final_dt
 
