@@ -300,6 +300,41 @@ def geodesic_integrator_new(N, s0, div, tol, bhspin):
     return states1, final_dt
 
 
+def geodesic_integrator_new2(N, s0, div, tol, bhspin):
+    '''
+    JAX implementation of the geodesic integrator.
+    '''
+
+    def geodesic_step(s0, _):
+
+        # get new timestep
+        dt = -(radius_cal(s0[:, :4], bhspin) - radius_EH(bhspin)) / div
+        condition = jnp.logical_or(jnp.abs(dt) * div > 1500, jnp.abs(dt) * div < tol)
+        condition = jnp.logical_or(condition, jnp.isnan(dt))
+        dt = lax.select(condition, jnp.zeros_like(dt), dt)
+
+        # get new state
+        new_state = RK4_gen(s0, dt, bhspin)
+
+        # get new timestep
+        dt_new = -(radius_cal(new_state[:, :4], bhspin) - radius_EH(bhspin)) / div
+        condition_new = jnp.logical_or(jnp.abs(dt_new) * div > 1500, jnp.abs(dt_new) * div < tol)
+        condition_new = jnp.logical_or(condition_new, jnp.isnan(dt_new))
+        dt_new = lax.select(condition_new, jnp.zeros_like(dt_new), dt_new)
+        condition_new = dt_new == 0.
+
+        # in places where next dt == 0, set new_state = s0 and dt = 0
+        dt = lax.select(condition_new, jnp.zeros_like(dt), dt)
+        new_state = lax.select(jnp.broadcast_to(condition_new[:, None], s0.shape), s0, new_state)
+
+        return new_state, (s0, dt)
+
+    # use scan because next step depends on the last
+    _, (states1, final_dt) = lax.scan(geodesic_step, s0, jnp.arange(N))
+
+    return states1, final_dt
+
+
 def geodesic_integrator_old(N, s0, div, tol, bhspin, use_tqdm=False):
     '''
     !@brief This function gets the Geodesic data and saves it in two arrays, X and V representing position and Velocity
