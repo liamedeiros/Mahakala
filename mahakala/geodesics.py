@@ -247,60 +247,7 @@ def initial_condition(s0_x, s0_v, bhspin):
     return s0
 
 
-def geodesic_integrator_new(N, s0, div, tol, bhspin):
-    '''
-    JAX implementation of the geodesic integrator.
-    '''
-
-    states1 = jnp.zeros((N + 1, s0.shape[0], s0.shape[1]))
-    final_dt = jnp.zeros((N, s0.shape[0]))
-    states1 = states1.at[0, :, :].set(s0)
-
-    #print(states1.shape)
-    #print(s0.shape)
-
-    def body_fn(carry, i):
-        states, final_dt, idx = carry
-
-        #jaxprint(states[idx - 1], idx)
-        #print(states[idx - 1])
-        #jaxprint(f"{idx}")  #, final_dt, idx)
-
-        dt = -(radius_cal(states[idx - 1][:, :4], bhspin) - radius_EH(bhspin)) / div
-        condition = jnp.logical_or(jnp.abs(dt) * div > 1500, jnp.abs(dt) * div < tol)
-        dt = lax.select(condition, jnp.zeros_like(dt), dt)
-
-        new_state = RK4_gen(states[idx - 1], dt, bhspin)  # BOGUE: is idx-1 correct?
-
-        # Store values at fixed index position to maintain shape consistency
-        states = states.at[idx].set(new_state)
-        final_dt = final_dt.at[idx - 1].set(dt)
-
-        return (states, final_dt, idx + 1), None
-
-    # Run scan with preallocated arrays
-    (states1, final_dt, _), _ = lax.scan(body_fn, (states1, final_dt, 1), jnp.arange(N))
-
-    print('c')
-
-    states1 = np.array(states1)
-    final_dt = np.array(final_dt)
-
-    # BOGUE: make this use the jnp arrays and be parallelized using jax
-    # set every "last" non-zero dt to be zero
-    npx = final_dt.shape[1]
-    for i in range(npx):
-        final_dt[:, i][np.isnan(final_dt[:, i])] = 0
-        idx = np.argmax(final_dt[:, i] == 0)
-        final_dt[idx-1:, i] = 0.
-        states1[idx-1:, i] = states1[idx-1, i]
-
-    print('d')
-
-    return states1, final_dt
-
-
-def geodesic_integrator_new2(N, s0, div, tol, bhspin):
+def geodesic_integrator(N, s0, div, tol, bhspin):
     '''
     JAX implementation of the geodesic integrator.
     '''
@@ -335,86 +282,6 @@ def geodesic_integrator_new2(N, s0, div, tol, bhspin):
     return states1, final_dt
 
 
-def geodesic_integrator_old(N, s0, div, tol, bhspin, use_tqdm=False):
-    '''
-    !@brief This function gets the Geodesic data and saves it in two arrays, X and V representing position and Velocity
-    TODO: fix description (currently inaccurate)
-    '''
-    states1 = [s0]
-    final_dt = []
-
-    print(states1)
-    print(s0.shape)
-
-    if use_tqdm:
-        iterator = tqdm(range(N))
-    else:
-        iterator = range(N)
-
-    for i in iterator:
-
-        dt = -(radius_cal_old(states1[-1][:, :4], bhspin) - radius_EH(bhspin))/div
-
-        imp_index = np.where((abs(dt) * div > 1500) | (abs(dt) * div < tol))
-
-        dt[imp_index] = 0.0
-
-        if len(np.where(dt == 0)[0]) == len(dt):
-            break
-
-        result1 = RK4_gen(states1[-1], dt, bhspin)
-        states1.append(result1)
-        final_dt.append(dt)
-
-        #print(states1[:3], result1[:3], dt[:3], i)
-
-        # BOGUE REMOVE (DEBUGGING!)
-        #print(dt.shape)
-        #print(np.array(final_dt).shape)
-
-        if np.isnan(np.min(result1)) and False:
-            print(i)
-            for j in range(len(states1[-2])):
-                if np.isnan(result1[j]).any():
-                    print(j)
-                    print('state')
-                    print(states1[-2][j])
-                    print('dt')
-                    print(dt[j])
-                    print('result1')
-                    print(result1[j])
-                    """
-            print('states')
-            print(states1[-2])
-            print('dt')
-            print(dt)
-            print('result1')
-            print(result1)
-            """
-            break
-
-    S = np.array(states1)
-    final_dt = np.array(final_dt)
-
-    # set every "last" non-zero dt to be zero
-    npx = final_dt.shape[1]
-    for i in range(npx):
-        final_dt[:, i][np.isnan(final_dt[:, i])] = 0
-        idx = np.argmax(final_dt[:, i] == 0)
-        final_dt[idx-1:, i] = 0.
-        S[idx-1:, i] = S[idx-1, i]
-
-    return S, final_dt
-
-
-def radius_cal_old(x, bhspin):
-    '''
-    !@brief Returns the Spherical Kerr-Schild radius for a point expressed in Cartesian Kerr-Schild coordinates.
-    '''
-    R = np.sqrt(x[..., 1]**2 + x[..., 2]**2 + x[..., 3]**2)
-    return np.sqrt((R**2 - bhspin**2 + np.sqrt((R**2 - bhspin**2)**2 + 4 * bhspin**2 * x[..., 3]**2)) / 2)
-
-
 def radius_cal(x, bhspin):
     '''
     !@brief Returns the Spherical Kerr-Schild radius for a point expressed in Cartesian Kerr-Schild coordinates.
@@ -424,7 +291,7 @@ def radius_cal(x, bhspin):
 
 
 @jit
-def RK4_gen(state1,dt,bhspin):
+def RK4_gen(state1, dt, bhspin):
 
     val = len(state1)
     ans1 = vectorized_rhs(state1, bhspin)
