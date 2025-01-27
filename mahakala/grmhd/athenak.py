@@ -28,6 +28,7 @@ from jax.scipy.interpolate import RegularGridInterpolator as jaxRegularGridInter
 
 from tqdm import tqdm
 
+from jax import lax
 from jax import numpy as jnp
 from jax import jit, jacfwd, vmap
 from jax.numpy import dot
@@ -546,7 +547,333 @@ class AthenakFluidModel:
         return vmap(self.another_metric)(X)
         """
 
+
+    #from jax.experimental import host_callback  # For debugging within jit
+    def get_prims_from_geodesics_jax(self, S, interp_method='linear', fluid_gamma=13./9):
+        # Profiling - Start timer
+        start_time = time.time()
+
+        fluid_params = dict(fluid_gamma=fluid_gamma)
+        nsteps, npx, _ = S.shape
+
+        # Preallocate memory with JAX arrays for better performance
+        prims = jnp.zeros((nsteps, npx, 8))
+        populated = jnp.zeros((nsteps, npx), dtype=bool)
+
+        for mbi in tqdm(self.mb_index_map.values()):
+            # Get min/max values for bounds
+            mb_x1min, mb_x1max = self.x1f[mbi].min(), self.x1f[mbi].max()
+            mb_x2min, mb_x2max = self.x2f[mbi].min(), self.x2f[mbi].max()
+            mb_x3min, mb_x3max = self.x3f[mbi].min(), self.x3f[mbi].max()
+
+            # Vectorized masking
+            mb_mask = (
+                (mb_x1min < S[..., 1]) & (S[..., 1] <= mb_x1max) &
+                (mb_x2min < S[..., 2]) & (S[..., 2] <= mb_x2max) &
+                (mb_x3min < S[..., 3]) & (S[..., 3] <= mb_x3max) &
+                (~populated)
+            )
+
+            if not jnp.any(mb_mask):
+                continue  # Skip if no points are valid
+
+            # Get extended bounds once and reuse
+            ebounds = jnp.array([
+                self.get_extended(self.x1v[mbi]),
+                self.get_extended(self.x2v[mbi]),
+                self.get_extended(self.x3v[mbi])
+            ])
+
+            # Convert mask for efficient indexing
+            mask_indices = jnp.where(mb_mask)
+
+            def process_prim(nprm, prims):
+                prm = self.all_meshblocks[mbi, nprm, :, :, :]
+                prm_transposed = prm.transpose((2, 1, 0))  # Optimize transposition
+
+                # JAX-compiled interpolation
+                rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
+
+                # Interpolation of masked points
+                remapped = rgi((
+                    S[..., 1][mb_mask],
+                    S[..., 2][mb_mask],
+                    S[..., 3][mb_mask]
+                ))
+
+                # Mapping function
+                outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+
+                # Update the prims array
+                prims = prims.at[mask_indices].set(outval)
+                return prims
+
+            # Vectorized processing for each primitive
+            prims = lax.fori_loop(0, self.nprim_all, process_prim, prims)
+
+            # Mark points as populated
+            populated = populated.at[mask_indices].set(True)
+
+        # Extract data efficiently
+        primitive_data = {
+            'dens': prims[..., 0],
+            'u': prims[..., 1],
+            'U1': prims[..., 2],
+            'U2': prims[..., 3],
+            'U3': prims[..., 4],
+            'B1': prims[..., 5],
+            'B2': prims[..., 6],
+            'B3': prims[..., 7],
+        }
+
+        # Profiling - End timer
+        end_time = time.time()
+        print(f'Total processing time: {end_time - start_time:.2f} seconds')
+
+        return primitive_data
+
+    def get_prims_from_geodesics_new(self, S, interp_method='linear', fluid_gamma=13./9):
+
+        times = []
+        times.append(time.time())
+        times.append(time.time())
+        print('a', times[-1] - times[-2])
+
+        fluid_params = dict(fluid_gamma=fluid_gamma)
+
+        nsteps, npx, _ = S.shape
+        prims = jnp.zeros((nsteps, npx, 8))
+        populated = jnp.zeros((nsteps, npx), dtype=bool)
+
+        times.append(time.time())
+        print('b', times[-1] - times[-2])
+
+        for mbi in tqdm(self.mb_index_map.values()):
+
+            ttt = time.time()
+            mb_x1min = self.x1f[mbi].min()
+            mb_x1max = self.x1f[mbi].max()
+            mb_x2min = self.x2f[mbi].min()
+            mb_x2max = self.x2f[mbi].max()
+            mb_x3min = self.x3f[mbi].min()
+            mb_x3max = self.x3f[mbi].max()
+
+            # get mask
+            mb_mask = (mb_x1min < S[..., 1]) & (S[..., 1] <= mb_x1max)
+            mb_mask &= (mb_x2min < S[..., 2]) & (S[..., 2] <= mb_x2max)
+            mb_mask &= (mb_x3min < S[..., 3]) & (S[..., 3] <= mb_x3max)
+            mb_mask &= (populated == 0)
+            mask_indices = jnp.where(mb_mask)
+
+            # set populated mask to avoid overwriting values that have already been filled
+            populated = populated.at[mask_indices].set(True)
+
+            x1e = self.get_extended(self.x1v[mbi])
+            x2e = self.get_extended(self.x2v[mbi])
+            x3e = self.get_extended(self.x3v[mbi])
+
+            ebounds = jnp.array([x1e, x2e, x3e])
+
+            if np.count_nonzero(mb_mask) == 0:
+                continue
+
+            ttt2 = time.time()
+            #print('startup', ttt2-ttt)
+
+            if False:
+                # create and use the interpolation object
+                for nprm in range(self.nprim_all):
+                    t0 = time.time()
+                    prm = self.all_meshblocks[mbi, nprm, :, :, :]
+                    t1 = time.time()
+                    #rgi = jaxRegularGridInterpolator((x1e, x2e, x3e), prm.transpose((2, 1, 0)),
+                    #                               method=interp_method)
+                    rgi = jaxRegularGridInterpolator(ebounds, prm.transpose((2, 1, 0)),
+                                                    method=interp_method)
+
+                    t2 = time.time()
+                    remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## expensive
+                    t3 = time.time()
+                    outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+                    t4 = time.time()
+
+                    prims[mb_mask, outidx] = outval  ## expensive??
+                    t5 = time.time()
+
+                    #print(mbi, nprm, t1-t0, t2-t1, t3-t2, t4-t3, t5-t4)
+
+            elif False:            
+                def process_prim(nprm, prims):
+                    prm = self.all_meshblocks[mbi, nprm, :, :, :]
+                    prm_transposed = prm.transpose((2, 1, 0))  # Optimize transposition
+
+                    # JAX-compiled interpolation
+                    rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
+
+                    # Interpolation of masked points
+                    remapped = rgi((
+                        S[..., 1][mb_mask],
+                        S[..., 2][mb_mask],
+                        S[..., 3][mb_mask]
+                    ))
+
+                    # Mapping function
+                    outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+
+                    # Update the prims array
+                    prims = prims.at[mask_indices].set(outval)
+                    return prims
+
+                # Vectorized processing for each primitive
+                prims = lax.fori_loop(0, self.nprim_all, process_prim, prims)
+
+            """
+            def process_prim(nprm, prims):
+                prm = self.all_meshblocks[mbi, nprm, :, :, :]
+                prm_transposed = prm.transpose((2, 1, 0))
+                rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
+                remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))
+                outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+                idx_expanded = (mask_indices[0], mask_indices[1], jnp.full_like(mask_indices[0], outidx))
+                #return prims.at[idx_expanded].set(outval)
+            
+            prims = lax.fori_loop(0, self.nprim_all, process_prim, prims)
+            """
+
+            ## this method works looping over primitives
+            if False:
+                for nprm in range(self.nprim_all):
+                    t1 = time.time()
+                    prm = self.all_meshblocks[mbi, nprm, :, :, :]
+                    prm_transposed = prm.transpose((2, 1, 0))
+                    t2 = time.time()
+                    rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
+                    t3 = time.time()
+                    remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## this is the most expensive
+                    t4 = time.time()
+                    outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+                    t5 = time.time()
+                    idx_expanded = (mask_indices[0], mask_indices[1], jnp.full_like(mask_indices[0], outidx))
+                    t6 = time.time()
+                    prims = prims.at[idx_expanded].set(outval)
+                    t7 = time.time()
+                    print(nprm, 456*(t2-t1), 456*(t3-t2), 456*(t4-t3), 456*(t5-t4), 456*(t6-t5), 456*(t7-t6))
+
+            t1 = time.time()
+            prm = self.all_meshblocks[mbi, :, :, :, :]
+            prm_transposed = prm.transpose((3, 2, 1, 0))
+            t2 = time.time()
+            rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
+            t3 = time.time()
+            remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## this is the most expensive
+            t4 = time.time()
+
+            #print(mbi, np.sum(mb_mask))
+
+            idx_expanded = mask_indices + (slice(None),) 
+
+            t5 = time.time()
+
+            prims = prims.at[idx_expanded].set(remapped)
+
+            t6 = time.time()
+
+            #break
+
+            #print(-1, 456*(t2-t1), 456*(t3-t2), 456*(t4-t3), 456*(t5-t4), 456*(t6-t5))
+
+            #print(remapped.shape)
+
+            ####
+            #print(456 * (t4-t3), remapped.shape)
+
+            """
+            outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+            t5 = time.time()
+            idx_expanded = (mask_indices[0], mask_indices[1], jnp.full_like(mask_indices[0], outidx))
+            t6 = time.time()
+            prims = prims.at[idx_expanded].set(outval)
+            t7 = time.time()
+            print(-1, 456*(t2-t1), 456*(t3-t2), 456*(t4-t3), 456*(t5-t4), 456*(t6-t5), 456*(t7-t6))
+            ####
+
+            """
+
+
+            """
+            ## WORKS
+            for nprm in range(self.nprim_all):
+
+                t1 = time.time()
+
+                prm = self.all_meshblocks[mbi, nprm, :, :, :]
+                prm_transposed = prm.transpose((2, 1, 0))
+
+                t2 = time.time()
+
+                rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
+
+                t3 = time.time()
+
+                remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))
+
+                t4 = time.time()
+
+                outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+
+                t5 = time.time()
+
+                idx_expanded = (mask_indices[0], mask_indices[1], jnp.full_like(mask_indices[0], outidx))
+
+                t6 = time.time()
+
+                prims = prims.at[idx_expanded].set(outval)
+
+                t7 = time.time()
+
+                print(nprm, t2-t1, t3-t2, t4-t3, t5-t4, t6-t5, t7-t6)
+
+                """
+
+            #times.append(time.time())
+
+
+            #populated[mb_mask] = 1
+
+        times.append(time.time())
+        print('z', times[-1] - times[-2])
+
+        densff_data     = prims[..., 0]
+        internal_u_data = prims[..., 1]
+        U_1_data        = prims[..., 2]
+        U_2_data        = prims[..., 3]
+        U_3_data        = prims[..., 4]
+        B_1_data        = prims[..., 5]
+        B_2_data        = prims[..., 6]
+        B_3_data        = prims[..., 7]
+
+        del prims
+        del populated
+
+        primitive_data = dict(
+            dens=densff_data,
+            u=internal_u_data,
+            U1=U_1_data,
+            U2=U_2_data,
+            U3=U_3_data,
+            B1=B_1_data,
+            B2=B_2_data,
+            B3=B_3_data
+        )
+
+        return primitive_data
+
     def get_prims_from_geodesics(self, S, interp_method='linear', fluid_gamma=13./9):
+
+        times = []
+        times.append(time.time())
+        times.append(time.time())
+        print('a', times[-1] - times[-2])
 
         fluid_params = dict(fluid_gamma=fluid_gamma)
 
@@ -563,6 +890,9 @@ class AthenakFluidModel:
 
         populated = np.zeros((nsteps, npx))
         prims = np.zeros((nsteps, npx, 8))
+
+        times.append(time.time())
+        print('b', times[-1] - times[-2])
 
         for mbi in tqdm(self.mb_index_map.values()):
 
@@ -606,9 +936,12 @@ class AthenakFluidModel:
                 prims[mb_mask, outidx] = outval  ## expensive??
                 t5 = time.time()
 
-                #print(mbi, nprm, t1-t0, t2-t1, t3-t2, t4-t3, t5-t4)
+                print(mbi, nprm, t1-t0, t2-t1, t3-t2, t4-t3, t5-t4)
 
             populated[mb_mask] = 1
+
+        times.append(time.time())
+        print('z', times[-1] - times[-2])
 
         densff_data     = prims[..., 0]
         internal_u_data = prims[..., 1]
