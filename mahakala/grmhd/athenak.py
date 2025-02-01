@@ -62,6 +62,12 @@ class AthenakFluidModel:
         self.bhspin = bhspin
 
 
+    def get_index_for_primitive_by_name(self, prim):
+        if prim in self.variable_names:
+            return np.where(self.variable_names == prim)[0][0]
+        return -1
+
+
     def map_prim_to_prim(self, remapped, nprm, variable_names, fluid_params):
         '''
         TODO: In future check that we are accurately dealing with mapping of input
@@ -107,7 +113,7 @@ class AthenakFluidModel:
             B = np.array(hfp['B'])
             LogicalLocations = np.array(hfp['LogicalLocations'])
             Levels = np.array(hfp['Levels'])
-            self.variable_names = np.array(hfp.attrs['VariableNames'])
+            self.variable_names = np.array([n.decode('utf-8') for n in hfp.attrs['VariableNames']])
             hfp.close()
 
             # uov[0] -> dens
@@ -528,129 +534,15 @@ class AthenakFluidModel:
 
         return new_meshblock
 
-    """
-    @jit
-    def another_metric(self, x):
-        eta = jnp.asarray([[1,0,0],[0,1,0],[0,0,1]])
-        a = self.bhspin
-        aa = a * a
-        zz = x[3]*x[3]
-        kk = 0.5 * (x[1]*x[1] + x[2]*x[2] + zz - aa)
-        rr = jnp.sqrt(kk * kk + aa * zz ) + kk
-        r = jnp.sqrt(rr)
-        f = (2.0 * rr * r)/(rr * rr + aa * zz)
-        l = jnp.array([(r * x[1] + a * x[2])/(rr + aa) , (r* x[2] - a * x[1])/(rr + aa) , x[3]/r])
-        return eta + f * (l[:,jnp.newaxis] * l[jnp.newaxis,:])
-
-    @jit
-    def vec_another_metric(self, X):
-        return vmap(self.another_metric)(X)
-        """
-
-
-    #from jax.experimental import host_callback  # For debugging within jit
-    def get_prims_from_geodesics_jax(self, S, interp_method='linear', fluid_gamma=13./9):
-        # Profiling - Start timer
-        start_time = time.time()
-
-        fluid_params = dict(fluid_gamma=fluid_gamma)
-        nsteps, npx, _ = S.shape
-
-        # Preallocate memory with JAX arrays for better performance
-        prims = jnp.zeros((nsteps, npx, 8))
-        populated = jnp.zeros((nsteps, npx), dtype=bool)
-
-        for mbi in tqdm(self.mb_index_map.values()):
-            # Get min/max values for bounds
-            mb_x1min, mb_x1max = self.x1f[mbi].min(), self.x1f[mbi].max()
-            mb_x2min, mb_x2max = self.x2f[mbi].min(), self.x2f[mbi].max()
-            mb_x3min, mb_x3max = self.x3f[mbi].min(), self.x3f[mbi].max()
-
-            # Vectorized masking
-            mb_mask = (
-                (mb_x1min < S[..., 1]) & (S[..., 1] <= mb_x1max) &
-                (mb_x2min < S[..., 2]) & (S[..., 2] <= mb_x2max) &
-                (mb_x3min < S[..., 3]) & (S[..., 3] <= mb_x3max) &
-                (~populated)
-            )
-
-            if not jnp.any(mb_mask):
-                continue  # Skip if no points are valid
-
-            # Get extended bounds once and reuse
-            ebounds = jnp.array([
-                self.get_extended(self.x1v[mbi]),
-                self.get_extended(self.x2v[mbi]),
-                self.get_extended(self.x3v[mbi])
-            ])
-
-            # Convert mask for efficient indexing
-            mask_indices = jnp.where(mb_mask)
-
-            def process_prim(nprm, prims):
-                prm = self.all_meshblocks[mbi, nprm, :, :, :]
-                prm_transposed = prm.transpose((2, 1, 0))  # Optimize transposition
-
-                # JAX-compiled interpolation
-                rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
-
-                # Interpolation of masked points
-                remapped = rgi((
-                    S[..., 1][mb_mask],
-                    S[..., 2][mb_mask],
-                    S[..., 3][mb_mask]
-                ))
-
-                # Mapping function
-                outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
-
-                # Update the prims array
-                prims = prims.at[mask_indices].set(outval)
-                return prims
-
-            # Vectorized processing for each primitive
-            prims = lax.fori_loop(0, self.nprim_all, process_prim, prims)
-
-            # Mark points as populated
-            populated = populated.at[mask_indices].set(True)
-
-        # Extract data efficiently
-        primitive_data = {
-            'dens': prims[..., 0],
-            'u': prims[..., 1],
-            'U1': prims[..., 2],
-            'U2': prims[..., 3],
-            'U3': prims[..., 4],
-            'B1': prims[..., 5],
-            'B2': prims[..., 6],
-            'B3': prims[..., 7],
-        }
-
-        # Profiling - End timer
-        end_time = time.time()
-        print(f'Total processing time: {end_time - start_time:.2f} seconds')
-
-        return primitive_data
-
-    def get_prims_from_geodesics_new(self, S, interp_method='linear', fluid_gamma=13./9):
-
-        times = []
-        times.append(time.time())
-        times.append(time.time())
-        print('a', times[-1] - times[-2])
-
-        fluid_params = dict(fluid_gamma=fluid_gamma)
+    def get_prims_from_geodesics_new(self, S, interp_method='linear'):
 
         nsteps, npx, _ = S.shape
         prims = jnp.zeros((nsteps, npx, 8))
         populated = jnp.zeros((nsteps, npx), dtype=bool)
 
-        times.append(time.time())
-        print('b', times[-1] - times[-2])
-
         for mbi in tqdm(self.mb_index_map.values()):
 
-            ttt = time.time()
+            # get extent of the meshblock
             mb_x1min = self.x1f[mbi].min()
             mb_x1max = self.x1f[mbi].max()
             mb_x2min = self.x2f[mbi].min()
@@ -671,61 +563,17 @@ class AthenakFluidModel:
             x1e = self.get_extended(self.x1v[mbi])
             x2e = self.get_extended(self.x2v[mbi])
             x3e = self.get_extended(self.x3v[mbi])
-
             ebounds = jnp.array([x1e, x2e, x3e])
 
             if np.count_nonzero(mb_mask) == 0:
                 continue
 
-            ttt2 = time.time()
-            #print('startup', ttt2-ttt)
-
-            if False:
-                # create and use the interpolation object
-                for nprm in range(self.nprim_all):
-                    t0 = time.time()
-                    prm = self.all_meshblocks[mbi, nprm, :, :, :]
-                    t1 = time.time()
-                    #rgi = jaxRegularGridInterpolator((x1e, x2e, x3e), prm.transpose((2, 1, 0)),
-                    #                               method=interp_method)
-                    rgi = jaxRegularGridInterpolator(ebounds, prm.transpose((2, 1, 0)),
-                                                    method=interp_method)
-
-                    t2 = time.time()
-                    remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## expensive
-                    t3 = time.time()
-                    outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
-                    t4 = time.time()
-
-                    prims[mb_mask, outidx] = outval  ## expensive??
-                    t5 = time.time()
-
-                    #print(mbi, nprm, t1-t0, t2-t1, t3-t2, t4-t3, t5-t4)
-
-            elif False:            
-                def process_prim(nprm, prims):
-                    prm = self.all_meshblocks[mbi, nprm, :, :, :]
-                    prm_transposed = prm.transpose((2, 1, 0))  # Optimize transposition
-
-                    # JAX-compiled interpolation
-                    rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
-
-                    # Interpolation of masked points
-                    remapped = rgi((
-                        S[..., 1][mb_mask],
-                        S[..., 2][mb_mask],
-                        S[..., 3][mb_mask]
-                    ))
-
-                    # Mapping function
-                    outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
-
-                    # Update the prims array
-                    prims = prims.at[mask_indices].set(outval)
-                    return prims
-
-                # Vectorized processing for each primitive
-                prims = lax.fori_loop(0, self.nprim_all, process_prim, prims)
+            prm = self.all_meshblocks[mbi, :, :, :, :]
+            prm_transposed = prm.transpose((3, 2, 1, 0))
+            rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
+            remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## this is the most expensive
+            idx_expanded = mask_indices + (slice(None),)
+            prims = prims.at[idx_expanded].set(remapped)
 
             """
             def process_prim(nprm, prims):
@@ -740,108 +588,8 @@ class AthenakFluidModel:
             prims = lax.fori_loop(0, self.nprim_all, process_prim, prims)
             """
 
-            ## this method works looping over primitives
-            if False:
-                for nprm in range(self.nprim_all):
-                    t1 = time.time()
-                    prm = self.all_meshblocks[mbi, nprm, :, :, :]
-                    prm_transposed = prm.transpose((2, 1, 0))
-                    t2 = time.time()
-                    rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
-                    t3 = time.time()
-                    remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## this is the most expensive
-                    t4 = time.time()
-                    outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
-                    t5 = time.time()
-                    idx_expanded = (mask_indices[0], mask_indices[1], jnp.full_like(mask_indices[0], outidx))
-                    t6 = time.time()
-                    prims = prims.at[idx_expanded].set(outval)
-                    t7 = time.time()
-                    print(nprm, 456*(t2-t1), 456*(t3-t2), 456*(t4-t3), 456*(t5-t4), 456*(t6-t5), 456*(t7-t6))
-
-            t1 = time.time()
-            prm = self.all_meshblocks[mbi, :, :, :, :]
-            prm_transposed = prm.transpose((3, 2, 1, 0))
-            t2 = time.time()
-            rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
-            t3 = time.time()
-            remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## this is the most expensive
-            t4 = time.time()
-
-            #print(mbi, np.sum(mb_mask))
-
-            idx_expanded = mask_indices + (slice(None),) 
-
-            t5 = time.time()
-
-            prims = prims.at[idx_expanded].set(remapped)
-
-            t6 = time.time()
-
-            #break
-
-            #print(-1, 456*(t2-t1), 456*(t3-t2), 456*(t4-t3), 456*(t5-t4), 456*(t6-t5))
-
-            #print(remapped.shape)
-
-            ####
-            #print(456 * (t4-t3), remapped.shape)
-
-            """
-            outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
-            t5 = time.time()
-            idx_expanded = (mask_indices[0], mask_indices[1], jnp.full_like(mask_indices[0], outidx))
-            t6 = time.time()
-            prims = prims.at[idx_expanded].set(outval)
-            t7 = time.time()
-            print(-1, 456*(t2-t1), 456*(t3-t2), 456*(t4-t3), 456*(t5-t4), 456*(t6-t5), 456*(t7-t6))
-            ####
-
-            """
-
-
-            """
-            ## WORKS
-            for nprm in range(self.nprim_all):
-
-                t1 = time.time()
-
-                prm = self.all_meshblocks[mbi, nprm, :, :, :]
-                prm_transposed = prm.transpose((2, 1, 0))
-
-                t2 = time.time()
-
-                rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
-
-                t3 = time.time()
-
-                remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))
-
-                t4 = time.time()
-
-                outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
-
-                t5 = time.time()
-
-                idx_expanded = (mask_indices[0], mask_indices[1], jnp.full_like(mask_indices[0], outidx))
-
-                t6 = time.time()
-
-                prims = prims.at[idx_expanded].set(outval)
-
-                t7 = time.time()
-
-                print(nprm, t2-t1, t3-t2, t4-t3, t5-t4, t6-t5, t7-t6)
-
-                """
-
-            #times.append(time.time())
-
-
-            #populated[mb_mask] = 1
-
-        times.append(time.time())
-        print('z', times[-1] - times[-2])
+        # TODO: get mapping to update which primitive index should be assigned to the dictionary``
+        # outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
 
         densff_data     = prims[..., 0]
         internal_u_data = prims[..., 1]
@@ -868,6 +616,294 @@ class AthenakFluidModel:
 
         return primitive_data
 
+    def get_prims_from_geodesics_parallel(self, S, interp_method='linear'):
+        """
+        
+        TODO: ensure that meshblock_indices == -1  =>  prims = 0
+
+        TODO: fix off-by-one errors and cell centering conventions
+
+        """
+        
+        nsteps, npx, nv = S.shape
+        nmb = len(self.mb_index_map.values())
+
+        # get which meshblock each geodesic point is in
+        meshblock_indices = np.ones((nsteps, npx), dtype=int) * -1
+
+        x1_extents = np.array([[self.x1f[mbi][0], self.x1f[mbi][-1]] for mbi in range(nmb)])
+        x2_extents = np.array([[self.x2f[mbi][0], self.x2f[mbi][-1]] for mbi in range(nmb)])
+        x3_extents = np.array([[self.x3f[mbi][0], self.x3f[mbi][-1]] for mbi in range(nmb)])
+
+        t0 = time.time()
+
+        for mbi in tqdm(range(nmb)):
+            mb_mask = (x1_extents[mbi][0] < S[..., 1]) & (S[..., 1] <= x1_extents[mbi][1])
+            mb_mask &= (x2_extents[mbi][0] < S[..., 2]) & (S[..., 2] <= x2_extents[mbi][1])
+            mb_mask &= (x3_extents[mbi][0] < S[..., 3]) & (S[..., 3] <= x3_extents[mbi][1])
+            meshblock_indices[mb_mask] = mbi
+
+        meshblock_indices = jnp.array(meshblock_indices)
+
+        t1 = time.time()
+        print(t1 - t0)
+
+        # get the primitive data
+        x1_left = jnp.array([self.x1v[mbi][0] for mbi in range(nmb)])
+        x2_left = jnp.array([self.x2v[mbi][0] for mbi in range(nmb)])
+        x3_left = jnp.array([self.x3v[mbi][0] for mbi in range(nmb)])
+        dx1 = jnp.array([self.x1v[mbi][1] - self.x1v[mbi][0] for mbi in range(nmb)])
+        dx2 = jnp.array([self.x2v[mbi][1] - self.x2v[mbi][0] for mbi in range(nmb)])
+        dx3 = jnp.array([self.x3v[mbi][1] - self.x3v[mbi][0] for mbi in range(nmb)])
+
+        meshblock_data = jnp.array(self.all_meshblocks)
+
+        # return the primitives evaluated at the points given by S[i, :, :4]
+        def body_fn(_, i):
+
+            # consider the ith step
+            S0 = S[i]
+
+            # get positions and offsets in meshblocks
+            x1_indices = S0[:, 1] - x1_left[meshblock_indices[i]] + dx1[meshblock_indices[i]]
+            x2_indices = S0[:, 2] - x2_left[meshblock_indices[i]] + dx2[meshblock_indices[i]]
+            x3_indices = S0[:, 3] - x3_left[meshblock_indices[i]] + dx3[meshblock_indices[i]]
+
+            x1_delta = x1_indices / dx1[meshblock_indices[i]]
+            x2_delta = x2_indices / dx2[meshblock_indices[i]]
+            x3_delta = x3_indices / dx3[meshblock_indices[i]]
+
+            # add one to correct for ghost zones
+            x1_indices = jnp.array(x1_indices // dx1[meshblock_indices[i]], dtype=int)
+            x2_indices = jnp.array(x2_indices // dx2[meshblock_indices[i]], dtype=int)
+            x3_indices = jnp.array(x3_indices // dx3[meshblock_indices[i]], dtype=int)
+
+            x1_delta = jnp.array(x1_delta % 1.)
+            x2_delta = jnp.array(x2_delta % 1.)
+            x3_delta = jnp.array(x3_delta % 1.)
+
+            # "manual" linear interpolation
+            # naming convention is x3, x2, x1 with (a, b) -> (0, +1)
+            daaa = meshblock_data[meshblock_indices[i], :, x3_indices, x2_indices, x1_indices]
+            daab = meshblock_data[meshblock_indices[i], :, x3_indices, x2_indices, x1_indices + 1]
+            daba = meshblock_data[meshblock_indices[i], :, x3_indices, x2_indices + 1, x1_indices]
+            dabb = meshblock_data[meshblock_indices[i], :, x3_indices, x2_indices + 1, x1_indices + 1]
+            dbaa = meshblock_data[meshblock_indices[i], :, x3_indices + 1, x2_indices, x1_indices]
+            dbab = meshblock_data[meshblock_indices[i], :, x3_indices + 1, x2_indices, x1_indices + 1]
+            dbba = meshblock_data[meshblock_indices[i], :, x3_indices + 1, x2_indices + 1, x1_indices]
+            dbbb = meshblock_data[meshblock_indices[i], :, x3_indices + 1, x2_indices + 1, x1_indices + 1]
+
+            daa = daaa + (daab - daaa) * x1_delta[:, None]
+            dab = daba + (dabb - daba) * x1_delta[:, None]
+            dba = dbaa + (dbab - dbaa) * x1_delta[:, None]
+            dbb = dbba + (dbbb - dbba) * x1_delta[:, None]
+            da = daa + (dab - daa) * x2_delta[:, None]
+            db = dba + (dbb - dba) * x2_delta[:, None]
+            prim_data_at_this_step = da + (db - da) * x3_delta[:, None]
+
+            return _, prim_data_at_this_step
+
+        _, prim_data = lax.scan(body_fn, None, jnp.arange(nsteps))
+
+        t2 = time.time()
+        print(t2 - t1)
+
+        primitive_data = {
+            'dens': prim_data[..., self.get_index_for_primitive_by_name('dens')],
+            'u': prim_data[..., self.get_index_for_primitive_by_name('eint')],
+            'U1': prim_data[..., self.get_index_for_primitive_by_name('velx')],
+            'U2': prim_data[..., self.get_index_for_primitive_by_name('vely')],
+            'U3': prim_data[..., self.get_index_for_primitive_by_name('velz')],
+            'B1': prim_data[..., self.get_index_for_primitive_by_name('bcc1')],
+            'B2': prim_data[..., self.get_index_for_primitive_by_name('bcc2')],
+            'B3': prim_data[..., self.get_index_for_primitive_by_name('bcc3')],
+        }
+
+        return primitive_data
+
+
+    def get_prims_from_geodesics_new2(self, S, interp_method='linear'):
+
+        nsteps, npx, _ = S.shape
+        prims = jnp.zeros((nsteps, npx, 8))  # TODO, we could add the last value as the "populated" index
+        #populated = jnp.zeros((nsteps, npx), dtype=bool)
+
+        jax_meshblock_data = jnp.array(self.all_meshblocks)
+
+        print('getting extents')
+        t0 = time.time()
+        extents_x1 = jnp.array([[jnp.min(x), jnp.max(x)] for x in self.x1f])
+        extents_x2 = jnp.array([[jnp.min(x), jnp.max(x)] for x in self.x2f])
+        extents_x3 = jnp.array([[jnp.min(x), jnp.max(x)] for x in self.x3f])
+        print('time:', time.time() - t0)
+
+        print('getting ebounds')
+        t0 = time.time()
+        ebounds = jnp.array([[self.get_extended(x) for x in self.x1v], [self.get_extended(x) for x in self.x2v], [self.get_extended(x) for x in self.x3v]])
+        print('time:', time.time() - t0)
+
+        def body_fn(mbi, prims):
+
+            # get extent of the meshblock
+            mb_x1min, mb_x1max = extents_x1[mbi]
+            mb_x2min, mb_x2max = extents_x2[mbi]
+            mb_x3min, mb_x3max = extents_x3[mbi]
+
+            # get mask
+            mb_mask = (mb_x1min < S[..., 1]) & (S[..., 1] <= mb_x1max)
+            mb_mask &= (mb_x2min < S[..., 2]) & (S[..., 2] <= mb_x2max)
+            mb_mask &= (mb_x3min < S[..., 3]) & (S[..., 3] <= mb_x3max)
+            
+            # get mask indices
+            mask_indices = jnp.where(mb_mask, size=S.shape[0])
+
+            # interpolate and set
+            #prm = jax_meshblock_data[mbi].transpose((3, 2, 1, 0))
+            #prm_transposed = prm.transpose((3, 2, 1, 0))
+            
+            rgi = jaxRegularGridInterpolator(ebounds[mbi], jax_meshblock_data[mbi].transpose((3, 2, 1, 0)), method='linear')
+
+            """
+            
+            
+            rgi = jaxRegularGridInterpolator(ebounds[mbi], prm_transposed, method='linear')
+
+            def non_empty_case(prims):
+                remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))
+                idx_expanded = valid_indices + (slice(None),)
+                return prims.at[idx_expanded].set(remapped)
+
+            def empty_case(prims):
+                return prims
+
+            prims = jax.lax.cond(jnp.any(mb_mask), non_empty_case, empty_case, prims)
+
+            
+            """
+
+            #remapped = rgi((S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask]))  ## this is the most expensive
+            #idx_expanded = mask_indices + (slice(None),)
+
+            # prims = prims.at[idx_expanded].set(remapped)
+        
+            return prims
+
+        prims = lax.fori_loop(0, len(self.mb_index_map.values()), body_fn, prims)
+
+        # TODO: get mapping to update which primitive index should be assigned to the dictionary``
+        # outidx, outval = self.map_prim_to_prim(remapped, nprm, self.variable_names, fluid_params)
+
+        densff_data     = prims[..., 0]
+        internal_u_data = prims[..., 1]
+        U_1_data        = prims[..., 2]
+        U_2_data        = prims[..., 3]
+        U_3_data        = prims[..., 4]
+        B_1_data        = prims[..., 5]
+        B_2_data        = prims[..., 6]
+        B_3_data        = prims[..., 7]
+
+        del prims
+        #del populated
+
+        primitive_data = dict(
+            dens=densff_data,
+            u=internal_u_data,
+            U1=U_1_data,
+            U2=U_2_data,
+            U3=U_3_data,
+            B1=B_1_data,
+            B2=B_2_data,
+            B3=B_3_data
+        )
+
+        return primitive_data
+
+    def get_prims_from_geodesics_new3(self, S, interp_method='linear'):
+
+        nsteps, npx, _ = S.shape
+
+        # Initialize arrays using JAX
+        prims = jnp.zeros((nsteps, npx, 8))
+        populated = jnp.zeros((nsteps, npx), dtype=bool)
+
+        # Prepare mesh block indices
+        mb_indices = jnp.array(list(self.mb_index_map.values()))
+
+        # Save meshblock extents in jax arrays
+        x1_minmax = jnp.array([[jnp.min(x), jnp.max(x)] for x in self.x1f])
+        x2_minmax = jnp.array([[jnp.min(x), jnp.max(x)] for x in self.x2f])
+        x3_minmax = jnp.array([[jnp.min(x), jnp.max(x)] for x in self.x3f])
+
+        def process_meshblock(carry, mbi):
+            populated, prims = carry
+
+            # Get meshblock extents
+            #mb_x1min, mb_x1max = jnp.min(self.x1f[mbi]), jnp.max(self.x1f[mbi])
+            #mb_x2min, mb_x2max = jnp.min(self.x2f[mbi]), jnp.max(self.x2f[mbi])
+            #mb_x3min, mb_x3max = jnp.min(self.x3f[mbi]), jnp.max(self.x3f[mbi])
+
+            # Get meshblock extents
+            mb_x1min, mb_x1max = x1_minmax[mbi]
+            mb_x2min, mb_x2max = x2_minmax[mbi]
+            mb_x3min, mb_x3max = x3_minmax[mbi]
+
+            # Compute mask efficiently
+            mb_mask = (
+                (mb_x1min < S[..., 1]) & (S[..., 1] <= mb_x1max) &
+                (mb_x2min < S[..., 2]) & (S[..., 2] <= mb_x2max) &
+                (mb_x3min < S[..., 3]) & (S[..., 3] <= mb_x3max) &
+                (~populated)
+            )
+
+            mask_indices = jnp.where(mb_mask)
+
+            # Early exit if no valid points found
+            if jnp.count_nonzero(mb_mask) == 0:
+                return (populated, prims), None
+
+            # Update the populated array
+            populated = populated.at[mask_indices].set(True)
+
+            # Get extended mesh coordinates
+            x1e = self.get_extended(self.x1v[mbi])
+            x2e = self.get_extended(self.x2v[mbi])
+            x3e = self.get_extended(self.x3v[mbi])
+            ebounds = jnp.array([x1e, x2e, x3e])
+
+            # Transpose and interpolate
+            prm_transposed = self.all_meshblocks[mbi, :, :, :, :].transpose((3, 2, 1, 0))
+            rgi = jaxRegularGridInterpolator(ebounds, prm_transposed, method=interp_method)
+
+            # Perform interpolation
+            sample_points = (S[..., 1][mb_mask], S[..., 2][mb_mask], S[..., 3][mb_mask])
+            remapped = rgi(sample_points)  # Expensive operation
+
+            # Store interpolated values in the correct indices
+            idx_expanded = mask_indices + (slice(None),)
+            prims = prims.at[idx_expanded].set(remapped)
+
+            return (populated, prims), None
+
+        # JIT the processing function for speed
+        jit_process_meshblock = jit(process_meshblock)
+
+        # Process all mesh blocks using lax.scan for efficiency
+        (populated, prims), _ = lax.scan(jit_process_meshblock, (populated, prims), mb_indices)
+
+        # Extract data efficiently
+        primitive_data = dict(
+            dens=prims[..., 0],
+            u=prims[..., 1],
+            U1=prims[..., 2],
+            U2=prims[..., 3],
+            U3=prims[..., 4],
+            B1=prims[..., 5],
+            B2=prims[..., 6],
+            B3=prims[..., 7]
+        )
+
+        return primitive_data
+    
     def get_prims_from_geodesics(self, S, interp_method='linear', fluid_gamma=13./9):
 
         times = []

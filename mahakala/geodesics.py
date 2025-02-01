@@ -250,6 +250,8 @@ def initial_condition(s0_x, s0_v, bhspin):
 def geodesic_integrator(N, s0, div, tol, bhspin):
     '''
     JAX implementation of the geodesic integrator.
+
+    TODO: change first argument (max_steps) to be optional kwarg
     '''
 
     def geodesic_step(s0, _):
@@ -279,7 +281,11 @@ def geodesic_integrator(N, s0, div, tol, bhspin):
     # use scan because next step depends on the last
     _, (states1, final_dt) = lax.scan(geodesic_step, s0, jnp.arange(N))
 
-    return states1, final_dt
+    # get index where final_dt is zero
+    all_zero_mask = jnp.all(final_dt == 0, axis=1)
+    first_zero_idx = jnp.argmax(all_zero_mask) + 2
+
+    return states1[:first_zero_idx], final_dt[:first_zero_idx]
 
 
 def radius_cal(x, bhspin):
