@@ -27,10 +27,10 @@ from scipy import special
 from jax import jit, lax
 
 
+EE = 4.8032e-10
 KB = 1.3807e-16
 CL = 2.99792458e10
 ME = 9.1094e-28
-EC = 4.8032e-10
 HPL = 6.6261e-27
 GNEWT = 6.6743e-8
 
@@ -83,25 +83,30 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu):
     - absorptivity: thermal synchrotron in cgs
     """
 
-    nuc = 2.79925e6 * B
-    nus = (2.0 / 9.0) * nuc * Theta_e**2 * jnp.sin(pitch_angle)
-    X = nu / nus
-    var = jnp.exp(- X**(1/3))
+    nu_max = 1.e12
+    Theta_e_min = 0.3
 
-    term = jnp.sqrt(X) + (2.0**(11/12)) * X**(1/6)
+    nuc = EE * B / (2. * np.pi * ME * CL)
+    nus = (2. / 9.) * nuc * Theta_e**2 * jnp.sin(pitch_angle)
+    X = nu / nus
+
+    var = jnp.exp(- X**(1/3))
+    term = jnp.sqrt(X) + 2.0**(11./12) * X**(1./6)
 
     emissivity = Ne * nus * term**2 / (2.*Theta_e**2.)  # approximation for K2
-    emissivity = emissivity * var * jnp.sqrt(2) * jnp.pi * EC**2 / (3.0 * CL)
+    emissivity = emissivity * var * jnp.sqrt(2) * jnp.pi * EE**2 / (3.0 * CL)
 
     emissivity = emissivity.at[jnp.isnan(emissivity)].set(0)
+    emissivity = emissivity.at[nu > nu_max].set(0)
+    emissivity = emissivity.at[Theta_e < Theta_e_min].set(0)
 
-    B_nu = (2*HPL*nu**3/CL**2)/(jnp.exp(HPL*nu/(ME*CL*CL*Theta_e)) - 1)
+    # since we should assume jax is using float32, we
+    # need to expand for small values of the exponent
+    bx = HPL * nu / (ME * CL * CL * Theta_e)
+    B_denominator = lax.select(bx < 2.e-3, bx / 24. * (24. + bx * (12. + bx * (4. + bx))), jnp.exp(bx) - 1)
+    B_nu = (2. * HPL * nu**3. / B_denominator) / CL**2.
 
-    return emissivity, emissivity/B_nu
+    absorptivity = emissivity / B_nu
+    absorptivity = absorptivity.at[jnp.isnan(absorptivity)].set(0)
 
-
-def absorption_coefficient(t_electron, je, nu, Beta):
-
-    B_nu = (2*HPL*nu**3/CL**2)/(pow(np.e,HPL*nu/(KB*t_electron)) - 1)
-
-    return je/B_nu
+    return emissivity, absorptivity
