@@ -115,12 +115,6 @@ class AthenakFluidModel:
             x3f = np.array(hfp['x3f'])
             uov = np.array(hfp['uov'])
 
-            B = np.array(hfp['B'])
-            LogicalLocations = np.array(hfp['LogicalLocations'])
-            Levels = np.array(hfp['Levels'])
-            self.variable_names = np.array([n.decode('utf-8') for n in hfp.attrs['VariableNames']])
-            hfp.close()
-
             # uov[0] -> dens
             # uov[1] -> velx
             # uov[2] -> vely
@@ -129,6 +123,12 @@ class AthenakFluidModel:
             # B[0] -> bcc1
             # B[1] -> bcc2
             # B[2] -> bcc3
+
+            B = np.array(hfp['B'])
+            LogicalLocations = np.array(hfp['LogicalLocations'])
+            Levels = np.array(hfp['Levels'])
+            self.variable_names = np.array([n.decode('utf-8') for n in hfp.attrs['VariableNames']])
+            hfp.close()
 
             min_level = int(Levels.min())
             max_level = int(Levels.max())
@@ -544,6 +544,8 @@ class AthenakFluidModel:
         Return the primitive variable data at the points given by S[:, :, :4] in
         a dictionary with keys ['dens', 'u', 'U1', 'U2', 'U3', 'B1', 'B2', 'B3']
         and filling in zero where the geodesics lie outside of the domain.
+
+        TODO: zero within some radius?
         """
 
         nsteps, npx, _ = S.shape
@@ -649,10 +651,11 @@ class AthenakFluidModel:
 
         return primitive_data
 
-
-    def get_fluid_scalars_from_geodesics(self, S, profile=True):
+    def get_fluid_scalars_from_geodesics(self, S, fallback_pitch_angle=np.pi/3., profile=False):
         """
         TODO: documentation
+
+        TODO: zero within some radius?
         """
 
         nsteps, npx, _ = S.shape
@@ -698,6 +701,11 @@ class AthenakFluidModel:
         iB1 = self.get_index_for_primitive_by_name('bcc1')
         iB2 = self.get_index_for_primitive_by_name('bcc2')
         iB3 = self.get_index_for_primitive_by_name('bcc3')
+
+        if iU2 != iU1 + 1 or iU3 != iU1 + 2:
+            raise ValueError("Velocity indices are not as expected")
+        if iB2 != iB1 + 1 or iB3 != iB1 + 2:
+            raise ValueError("Magnetic field indices are not as expected")
 
         def body_fn(_, i):
 
@@ -751,7 +759,7 @@ class AthenakFluidModel:
             gcon = vec_imetric(S0[:, :4], self.bhspin)
             alpha = jnp.sqrt(1. / (-gcon[:, 0, 0]))
 
-            # get ucon
+            # get ucon and ucov
             Uprim = prims[:, iU1:iU1+3]
             gamma = jnp.sqrt(1 + jnp.einsum('aj,aj->a', jnp.einsum('ai,aij->aj', Uprim, gcov[:, 1:, 1:]), Uprim))
             ucon0 = gamma / alpha
@@ -759,258 +767,44 @@ class AthenakFluidModel:
             ucon2 = Uprim[:, 1] - gamma * alpha * gcon[:, 0, 2]
             ucon3 = Uprim[:, 2] - gamma * alpha * gcon[:, 0, 3]
             ucon = jnp.stack([ucon0, ucon1, ucon2, ucon3], axis=1)
+            ucov = jnp.einsum('aij,aj->ai', gcov, ucon)
 
-            ## TODO, ucon confirmed up to this point. might be ways to make Uprim, ucon indexing faster!
+            # get bcon and bcov
+            Bprim = prims[:, iB1:iB1+3]
+            bcon0 = jnp.einsum('ai,ai->a', Bprim, ucov[:, 1:])
+            bcon1 = (Bprim[:, 0] + ucon1 * bcon0) / ucon0
+            bcon2 = (Bprim[:, 1] + ucon2 * bcon0) / ucon0
+            bcon3 = (Bprim[:, 2] + ucon3 * bcon0) / ucon0
+            bcon = jnp.stack([bcon0, bcon1, bcon2, bcon3], axis=1)
+            bcov = jnp.einsum('aij,aj->ai', gcov, bcon)
 
-            if False:
-                # for checking
-                prims = prims.at[:, :4].set(ucon)
-                prims = prims.at[:, 4].set(alpha)
-                prims = prims.at[:, 5].set(jnp.einsum('aj,aj->a', jnp.einsum('ai,aij->aj', Uprim, gcov[:, 1:, 1:]), Uprim))
+            # compute scalars
+            kdotu = jnp.einsum('ai,ai->a', S0[:, 4:], ucov)
+            kdotb = jnp.einsum('ai,ai->a', S0[:, 4:], bcov)
+            bdotb = jnp.einsum('ai,ai->a', bcon, bcov)
 
-            # get bcon
-            """
-                        BuUu = np.zeros((nsteps, npx))
+            # correct pitch angle
+            pitch_angle = kdotb / (jnp.abs(kdotu) * jnp.sqrt(bdotb))
+            pitch_angle = lax.select(jnp.isnan(pitch_angle), jnp.ones_like(pitch_angle) * jnp.cos(fallback_pitch_angle), pitch_angle)  ## TODO fix M_PI/2, M_PI/3
+            pitch_angle = lax.select(jnp.abs(pitch_angle) > 1.0, pitch_angle / jnp.abs(pitch_angle), pitch_angle)
+            pitch_angle = jnp.arccos(pitch_angle)
 
-        total_B = np.array([primitive_data['B1'], primitive_data['B2'], primitive_data['B3']])
-        total_B = np.transpose(total_B, (1, 2, 0))
+            return _, jnp.stack([prims[:, irho], prims[:, iu], pitch_angle, kdotu, jnp.sqrt(bdotb)], axis=1)
 
-        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
-        total_u = np.transpose(total_u, (1, 2, 0))
-
-        for i in tqdm(range(nsteps)):
-            BuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4)[:,:,1:] @ total_B[i,:,:].reshape(npx,3,1)).reshape(npx)
-
-        del total_B
-
-        B0_data = BuUu
-        del BuUu
-        B1_data = 1/u0_data * (primitive_data['B1'] + B0_data * u1_data)
-        B2_data = 1/u0_data * (primitive_data['B2'] + B0_data * u2_data)
-        B3_data = 1/u0_data * (primitive_data['B3'] + B0_data * u3_data)"""
-
-
-
-            return _, prims
-
-        _, prims = lax.scan(body_fn, None, jnp.arange(nsteps))
+        _, scalar_data = lax.scan(body_fn, None, jnp.arange(nsteps))
 
         t2 = time.time()
 
-        primitive_data = dict(
-            dens=prims[..., self.get_index_for_primitive_by_name('dens')],
-            u=prims[..., self.get_index_for_primitive_by_name('eint')],
-            U1=prims[..., self.get_index_for_primitive_by_name('velx')],
-            U2=prims[..., self.get_index_for_primitive_by_name('vely')],
-            U3=prims[..., self.get_index_for_primitive_by_name('velz')],
-            B1=prims[..., self.get_index_for_primitive_by_name('bcc1')],
-            B2=prims[..., self.get_index_for_primitive_by_name('bcc2')],
-            B3=prims[..., self.get_index_for_primitive_by_name('bcc3')],
-        )
-
         if profile:
             print(f"Time to compute meshblock indices: {t1-t0}")
-            print(f"Time to compute primitives: {t2-t1}")
-        
+            print(f"Time to compute scalar data: {t2-t1}")
+
         scalars = dict(
-            prims=prims
+            dens=scalar_data[:, :, 0],
+            u=scalar_data[:, :, 1],
+            pitch_angle=scalar_data[:, :, 2],
+            kdotu=scalar_data[:, :, 3],
+            b=scalar_data[:, :, 4]
         )
 
         return scalars
-
-        """
-
-        #######################
-        # Now, for the magnetic field components
-
-        BuUu = np.zeros((nsteps, npx))
-
-        total_B = np.array([primitive_data['B1'], primitive_data['B2'], primitive_data['B3']])
-        total_B = np.transpose(total_B, (1, 2, 0))
-
-        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
-        total_u = np.transpose(total_u, (1, 2, 0))
-
-        for i in tqdm(range(nsteps)):
-            BuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4)[:,:,1:] @ total_B[i,:,:].reshape(npx,3,1)).reshape(npx)
-
-        del total_B
-
-        B0_data = BuUu
-        del BuUu
-        B1_data = 1/u0_data * (primitive_data['B1'] + B0_data * u1_data)
-        B2_data = 1/u0_data * (primitive_data['B2'] + B0_data * u2_data)
-        B3_data = 1/u0_data * (primitive_data['B3'] + B0_data * u3_data)
-
-        KuUu = np.zeros((nsteps, npx))
-
-        for i in tqdm(range(nsteps)):
-            KuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ S[i,:,4:].reshape(npx,4,1)).reshape(npx)
-
-        total_B = np.array([B0_data, B1_data, B2_data, B3_data])
-        tot_B = np.transpose(total_B, (1,2,0))
-
-        KuBu = np.zeros((nsteps, npx))
-
-        for i in tqdm(range(nsteps)):
-            KuBu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ S[i,:,4:].reshape(npx,4,1)).reshape(npx)
-
-        BuBu = np.zeros((nsteps, npx))
-
-        for i in tqdm(range(nsteps)):
-            BuBu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx)
-
-        del tot_B
-        del total_B
-
-        ## TODO remove UdotU
-        UuUu = np.zeros((nsteps, npx))
-
-        del total_u
-        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
-        tot_u = np.transpose(total_u, (1, 2, 0))
-
-        for i in tqdm(range(nsteps)):
-            UuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ tot_u[i,:,:].reshape(npx,4,1)).reshape(npx)
-
-        def compute_pitch_angle(KuUu, KuBu, BuBu):
-
-            angle = KuBu/(np.abs(KuUu) * np.sqrt(BuBu))
-
-            index = np.where(BuBu == 0)
-            angle[index[0],index[1]] = np.cos(np.pi/2)
-
-            index = np.where(abs(angle) > 1.0)
-            angle[index[0],index[1]] = angle[index[0],index[1]]/abs(angle[index[0],index[1]])
-
-            return np.arccos(angle)
-
-        observer_angle = compute_pitch_angle(KuUu,KuBu,BuBu)
-
-        tensorial_data = dict(
-            ucon = np.array([u0_data, u1_data, u2_data, u3_data]),
-            bcon = np.array([B0_data, B1_data, B2_data, B3_data]),
-            pitch_angle = observer_angle,
-            udotu = UuUu,
-            kdotu = KuUu,
-            kdotb = KuBu,
-            bdotb = BuBu
-        )
-
-        return tensorial_data
-
-        """
-
-
-
-
-    def compute_tensorial(self, S, primitive_data):
-        """
-        TODO: documentation
-        """
-
-        nsteps, npx, _ = S.shape
-
-        UuUu = np.zeros((nsteps, npx))
-
-        total_u = np.array([primitive_data['U1'], primitive_data['U2'], primitive_data['U3']])
-        total_u = np.transpose(total_u, (1, 2, 0))
-
-        for i in tqdm(range(nsteps)):
-            UuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin)[:,1:,1:] @ total_u[i,:,:].reshape(npx,3,1)).reshape(npx,1,3) @ total_u[i,:,:].reshape(npx,3,1)).reshape(npx)
-        del total_u
-
-        GAMMA = np.sqrt(1 + UuUu)
-        #del UuUu
-
-        final_M = np.zeros((nsteps, npx, 4))
-        for i in tqdm(range(nsteps)):
-            final_M[i,:,:] = vec_imetric(S[i,:,:4], self.bhspin)[:,0,:]
-
-        u0_data = (GAMMA/pow(-final_M[:,:,0], -1/2))
-        u1_data = (primitive_data['U1'] - (final_M[:,:,1] * GAMMA * pow(-final_M[:,:,0],-1/2)))
-        u2_data = (primitive_data['U2'] - (final_M[:,:,2] * GAMMA * pow(-final_M[:,:,0],-1/2)))
-        u3_data = (primitive_data['U3'] - (final_M[:,:,3] * GAMMA * pow(-final_M[:,:,0],-1/2)))
-
-        #del final_M
-
-        #######################
-        # Now, for the magnetic field components
-
-        BuUu = np.zeros((nsteps, npx))
-
-        total_B = np.array([primitive_data['B1'], primitive_data['B2'], primitive_data['B3']])
-        total_B = np.transpose(total_B, (1, 2, 0))
-
-        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
-        total_u = np.transpose(total_u, (1, 2, 0))
-
-        for i in tqdm(range(nsteps)):
-            BuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4)[:,:,1:] @ total_B[i,:,:].reshape(npx,3,1)).reshape(npx)
-
-        del total_B
-
-        B0_data = BuUu
-        del BuUu
-        B1_data = 1/u0_data * (primitive_data['B1'] + B0_data * u1_data)
-        B2_data = 1/u0_data * (primitive_data['B2'] + B0_data * u2_data)
-        B3_data = 1/u0_data * (primitive_data['B3'] + B0_data * u3_data)
-
-        KuUu = np.zeros((nsteps, npx))
-
-        for i in tqdm(range(nsteps)):
-            KuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ S[i,:,4:].reshape(npx,4,1)).reshape(npx)
-
-        total_B = np.array([B0_data, B1_data, B2_data, B3_data])
-        tot_B = np.transpose(total_B, (1,2,0))
-
-        KuBu = np.zeros((nsteps, npx))
-
-        for i in tqdm(range(nsteps)):
-            KuBu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ S[i,:,4:].reshape(npx,4,1)).reshape(npx)
-
-        BuBu = np.zeros((nsteps, npx))
-
-        for i in tqdm(range(nsteps)):
-            BuBu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx)
-
-        del tot_B
-        del total_B
-
-        ## TODO remove UdotU
-        UuUu = np.zeros((nsteps, npx))
-
-        del total_u
-        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
-        tot_u = np.transpose(total_u, (1, 2, 0))
-
-        for i in tqdm(range(nsteps)):
-            UuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ tot_u[i,:,:].reshape(npx,4,1)).reshape(npx)
-
-        def compute_pitch_angle(KuUu, KuBu, BuBu):
-
-            angle = KuBu/(np.abs(KuUu) * np.sqrt(BuBu))
-
-            index = np.where(BuBu == 0)
-            angle[index[0],index[1]] = np.cos(np.pi/2)
-
-            index = np.where(abs(angle) > 1.0)
-            angle[index[0],index[1]] = angle[index[0],index[1]]/abs(angle[index[0],index[1]])
-
-            return np.arccos(angle)
-
-        observer_angle = compute_pitch_angle(KuUu,KuBu,BuBu)
-
-        tensorial_data = dict(
-            ucon = np.array([u0_data, u1_data, u2_data, u3_data]),
-            bcon = np.array([B0_data, B1_data, B2_data, B3_data]),
-            pitch_angle = observer_angle,
-            udotu = UuUu,
-            kdotu = KuUu,
-            kdotb = KuBu,
-            bdotb = BuBu,
-            UuUu = UuUu,
-            final_M = final_M
-        )
-
-        return tensorial_data
