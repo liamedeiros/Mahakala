@@ -539,15 +539,13 @@ class AthenakFluidModel:
 
         return new_meshblock
 
-    def get_prims_from_geodesics(self, S, interp_method='linear'):
+    def get_prims_from_geodesics(self, S, profile=False):
         """
-        TODO: documentation
-        
-        TODO: ensure that meshblock_indices == -1  =>  prims = 0
-
-
+        Return the primitive variable data at the points given by S[:, :, :4] in
+        a dictionary with keys ['dens', 'u', 'U1', 'U2', 'U3', 'B1', 'B2', 'B3']
+        and filling in zero where the geodesics lie outside of the domain.
         """
-        
+
         nsteps, npx, _ = S.shape
         nmb = len(self.mb_index_map.values())
 
@@ -569,7 +567,6 @@ class AthenakFluidModel:
         mb_indices = jnp.array(mb_indices)
 
         t1 = time.time()
-        print(t1 - t0)
 
         # get the primitive data
         x1_left = jnp.array([self.x1v[mbi][0] for mbi in range(nmb)])
@@ -634,7 +631,6 @@ class AthenakFluidModel:
         _, prims = lax.scan(body_fn, None, jnp.arange(nsteps))
 
         t2 = time.time()
-        print(t2 - t1)
 
         primitive_data = dict(
             dens=prims[..., self.get_index_for_primitive_by_name('dens')],
@@ -647,37 +643,182 @@ class AthenakFluidModel:
             B3=prims[..., self.get_index_for_primitive_by_name('bcc3')],
         )
 
+        if profile:
+            print(f"Time to compute meshblock indices: {t1-t0}")
+            print(f"Time to compute primitives: {t2-t1}")
+
         return primitive_data
 
-    def compute_tensorial(self, S, primitive_data):
+
+    def get_fluid_scalars_from_geodesics(self, S, profile=True):
         """
         TODO: documentation
         """
 
         nsteps, npx, _ = S.shape
+        nmb = len(self.mb_index_map.values())
 
-        UuUu = np.zeros((nsteps, npx))
+        # get which meshblock each geodesic point is in
+        mb_indices = np.ones((nsteps, npx), dtype=int) * -1
 
-        total_u = np.array([primitive_data['U1'], primitive_data['U2'], primitive_data['U3']])
+        ext_x1 = np.array([[self.x1f[mbi][0], self.x1f[mbi][-1]] for mbi in range(nmb)])
+        ext_x2 = np.array([[self.x2f[mbi][0], self.x2f[mbi][-1]] for mbi in range(nmb)])
+        ext_x3 = np.array([[self.x3f[mbi][0], self.x3f[mbi][-1]] for mbi in range(nmb)])
+
+        t0 = time.time()
+
+        for mbi in tqdm(range(nmb)):
+            mb_mask = (ext_x1[mbi][0] < S[..., 1]) & (S[..., 1] <= ext_x1[mbi][1])
+            mb_mask &= (ext_x2[mbi][0] < S[..., 2]) & (S[..., 2] <= ext_x2[mbi][1])
+            mb_mask &= (ext_x3[mbi][0] < S[..., 3]) & (S[..., 3] <= ext_x3[mbi][1])
+            mb_indices[mb_mask] = mbi
+
+        mb_indices = jnp.array(mb_indices)
+
+        t1 = time.time()
+
+        # get the primitive data
+        x1_left = jnp.array([self.x1v[mbi][0] for mbi in range(nmb)])
+        x2_left = jnp.array([self.x2v[mbi][0] for mbi in range(nmb)])
+        x3_left = jnp.array([self.x3v[mbi][0] for mbi in range(nmb)])
+        dx1 = jnp.array([self.x1v[mbi][1] - self.x1v[mbi][0] for mbi in range(nmb)])
+        dx2 = jnp.array([self.x2v[mbi][1] - self.x2v[mbi][0] for mbi in range(nmb)])
+        dx3 = jnp.array([self.x3v[mbi][1] - self.x3v[mbi][0] for mbi in range(nmb)])
+
+        meshblock_data = jnp.array(self.all_meshblocks)
+
+        # compute scalars evaluated at the points given by S[i, :, :4] using
+        # S[i, :, 4:] as the photon wavevector
+
+        irho = self.get_index_for_primitive_by_name('dens')
+        iu = self.get_index_for_primitive_by_name('eint')
+        iU1 = self.get_index_for_primitive_by_name('velx')
+        iU2 = self.get_index_for_primitive_by_name('vely')
+        iU3 = self.get_index_for_primitive_by_name('velz')
+        iB1 = self.get_index_for_primitive_by_name('bcc1')
+        iB2 = self.get_index_for_primitive_by_name('bcc2')
+        iB3 = self.get_index_for_primitive_by_name('bcc3')
+
+        def body_fn(_, i):
+
+            # consider the ith step
+            S0 = S[i]
+
+            # get positions and offsets in meshblocks
+            x1_indices = S0[:, 1] - x1_left[mb_indices[i]] + dx1[mb_indices[i]]
+            x2_indices = S0[:, 2] - x2_left[mb_indices[i]] + dx2[mb_indices[i]]
+            x3_indices = S0[:, 3] - x3_left[mb_indices[i]] + dx3[mb_indices[i]]
+
+            x1_delta = x1_indices / dx1[mb_indices[i]]
+            x2_delta = x2_indices / dx2[mb_indices[i]]
+            x3_delta = x3_indices / dx3[mb_indices[i]]
+
+            # add one to correct for ghost zones
+            x1_indices = jnp.array(x1_indices // dx1[mb_indices[i]], dtype=int)
+            x2_indices = jnp.array(x2_indices // dx2[mb_indices[i]], dtype=int)
+            x3_indices = jnp.array(x3_indices // dx3[mb_indices[i]], dtype=int)
+
+            x1_delta = jnp.array(x1_delta % 1.)
+            x2_delta = jnp.array(x2_delta % 1.)
+            x3_delta = jnp.array(x3_delta % 1.)
+
+            # "manual" linear interpolation
+            # naming convention is x3, x2, x1 with (a, b) -> (0, +1)
+            daaa = meshblock_data[mb_indices[i], :, x3_indices, x2_indices, x1_indices]
+            daab = meshblock_data[mb_indices[i], :, x3_indices, x2_indices, x1_indices + 1]
+            daba = meshblock_data[mb_indices[i], :, x3_indices, x2_indices + 1, x1_indices]
+            dabb = meshblock_data[mb_indices[i], :, x3_indices, x2_indices + 1, x1_indices + 1]
+            dbaa = meshblock_data[mb_indices[i], :, x3_indices + 1, x2_indices, x1_indices]
+            dbab = meshblock_data[mb_indices[i], :, x3_indices + 1, x2_indices, x1_indices + 1]
+            dbba = meshblock_data[mb_indices[i], :, x3_indices + 1, x2_indices + 1, x1_indices]
+            dbbb = meshblock_data[mb_indices[i], :, x3_indices + 1, x2_indices + 1, x1_indices + 1]
+
+            daa = daaa + (daab - daaa) * x1_delta[:, None]
+            dab = daba + (dabb - daba) * x1_delta[:, None]
+            dba = dbaa + (dbab - dbaa) * x1_delta[:, None]
+            dbb = dbba + (dbbb - dbba) * x1_delta[:, None]
+            da = daa + (dab - daa) * x2_delta[:, None]
+            db = dba + (dbb - dba) * x2_delta[:, None]
+            prims = da + (db - da) * x3_delta[:, None]
+
+            # update prim array to be zero wherever the meshblock index is -1
+            condition = mb_indices[i] == -1
+            condition = jnp.broadcast_to(condition[:, None], prims.shape)
+            prims = lax.select(condition, jnp.zeros_like(prims), prims)
+
+            # get metric
+            gcov = vec_metric(S0[:, :4], self.bhspin)
+            gcon = vec_imetric(S0[:, :4], self.bhspin)
+            alpha = jnp.sqrt(1. / (-gcon[:, 0, 0]))
+
+            # get ucon
+            Uprim = prims[:, iU1:iU1+3]
+            gamma = jnp.sqrt(1 + jnp.einsum('aj,aj->a', jnp.einsum('ai,aij->aj', Uprim, gcov[:, 1:, 1:]), Uprim))
+            ucon0 = gamma / alpha
+            ucon1 = Uprim[:, 0] - gamma * alpha * gcon[:, 0, 1]
+            ucon2 = Uprim[:, 1] - gamma * alpha * gcon[:, 0, 2]
+            ucon3 = Uprim[:, 2] - gamma * alpha * gcon[:, 0, 3]
+            ucon = jnp.stack([ucon0, ucon1, ucon2, ucon3], axis=1)
+
+            ## TODO, ucon confirmed up to this point. might be ways to make Uprim, ucon indexing faster!
+
+            if False:
+                # for checking
+                prims = prims.at[:, :4].set(ucon)
+                prims = prims.at[:, 4].set(alpha)
+                prims = prims.at[:, 5].set(jnp.einsum('aj,aj->a', jnp.einsum('ai,aij->aj', Uprim, gcov[:, 1:, 1:]), Uprim))
+
+            # get bcon
+            """
+                        BuUu = np.zeros((nsteps, npx))
+
+        total_B = np.array([primitive_data['B1'], primitive_data['B2'], primitive_data['B3']])
+        total_B = np.transpose(total_B, (1, 2, 0))
+
+        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
         total_u = np.transpose(total_u, (1, 2, 0))
 
         for i in tqdm(range(nsteps)):
-            UuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin)[:,1:,1:] @ total_u[i,:,:].reshape(npx,3,1)).reshape(npx,1,3) @ total_u[i,:,:].reshape(npx,3,1)).reshape(npx)
-        del total_u
+            BuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4)[:,:,1:] @ total_B[i,:,:].reshape(npx,3,1)).reshape(npx)
 
-        GAMMA = np.sqrt(1 + UuUu)
-        del UuUu
+        del total_B
 
-        final_M = np.zeros((nsteps, npx, 4))
-        for i in tqdm(range(nsteps)):
-            final_M[i,:,:] = vec_imetric(S[i,:,:4], self.bhspin)[:,0,:]
+        B0_data = BuUu
+        del BuUu
+        B1_data = 1/u0_data * (primitive_data['B1'] + B0_data * u1_data)
+        B2_data = 1/u0_data * (primitive_data['B2'] + B0_data * u2_data)
+        B3_data = 1/u0_data * (primitive_data['B3'] + B0_data * u3_data)"""
 
-        u0_data = (GAMMA/pow(-final_M[:,:,0], -1/2))
-        u1_data = (primitive_data['U1'] - (final_M[:,:,1] * GAMMA * pow(-final_M[:,:,0],-1/2)))
-        u2_data = (primitive_data['U2'] - (final_M[:,:,2] * GAMMA * pow(-final_M[:,:,0],-1/2)))
-        u3_data = (primitive_data['U3'] - (final_M[:,:,3] * GAMMA * pow(-final_M[:,:,0],-1/2)))
 
-        del final_M
+
+            return _, prims
+
+        _, prims = lax.scan(body_fn, None, jnp.arange(nsteps))
+
+        t2 = time.time()
+
+        primitive_data = dict(
+            dens=prims[..., self.get_index_for_primitive_by_name('dens')],
+            u=prims[..., self.get_index_for_primitive_by_name('eint')],
+            U1=prims[..., self.get_index_for_primitive_by_name('velx')],
+            U2=prims[..., self.get_index_for_primitive_by_name('vely')],
+            U3=prims[..., self.get_index_for_primitive_by_name('velz')],
+            B1=prims[..., self.get_index_for_primitive_by_name('bcc1')],
+            B2=prims[..., self.get_index_for_primitive_by_name('bcc2')],
+            B3=prims[..., self.get_index_for_primitive_by_name('bcc3')],
+        )
+
+        if profile:
+            print(f"Time to compute meshblock indices: {t1-t0}")
+            print(f"Time to compute primitives: {t2-t1}")
+        
+        scalars = dict(
+            prims=prims
+        )
+
+        return scalars
+
+        """
 
         #######################
         # Now, for the magnetic field components
@@ -754,6 +895,122 @@ class AthenakFluidModel:
             kdotu = KuUu,
             kdotb = KuBu,
             bdotb = BuBu
+        )
+
+        return tensorial_data
+
+        """
+
+
+
+
+    def compute_tensorial(self, S, primitive_data):
+        """
+        TODO: documentation
+        """
+
+        nsteps, npx, _ = S.shape
+
+        UuUu = np.zeros((nsteps, npx))
+
+        total_u = np.array([primitive_data['U1'], primitive_data['U2'], primitive_data['U3']])
+        total_u = np.transpose(total_u, (1, 2, 0))
+
+        for i in tqdm(range(nsteps)):
+            UuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin)[:,1:,1:] @ total_u[i,:,:].reshape(npx,3,1)).reshape(npx,1,3) @ total_u[i,:,:].reshape(npx,3,1)).reshape(npx)
+        del total_u
+
+        GAMMA = np.sqrt(1 + UuUu)
+        #del UuUu
+
+        final_M = np.zeros((nsteps, npx, 4))
+        for i in tqdm(range(nsteps)):
+            final_M[i,:,:] = vec_imetric(S[i,:,:4], self.bhspin)[:,0,:]
+
+        u0_data = (GAMMA/pow(-final_M[:,:,0], -1/2))
+        u1_data = (primitive_data['U1'] - (final_M[:,:,1] * GAMMA * pow(-final_M[:,:,0],-1/2)))
+        u2_data = (primitive_data['U2'] - (final_M[:,:,2] * GAMMA * pow(-final_M[:,:,0],-1/2)))
+        u3_data = (primitive_data['U3'] - (final_M[:,:,3] * GAMMA * pow(-final_M[:,:,0],-1/2)))
+
+        #del final_M
+
+        #######################
+        # Now, for the magnetic field components
+
+        BuUu = np.zeros((nsteps, npx))
+
+        total_B = np.array([primitive_data['B1'], primitive_data['B2'], primitive_data['B3']])
+        total_B = np.transpose(total_B, (1, 2, 0))
+
+        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
+        total_u = np.transpose(total_u, (1, 2, 0))
+
+        for i in tqdm(range(nsteps)):
+            BuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4)[:,:,1:] @ total_B[i,:,:].reshape(npx,3,1)).reshape(npx)
+
+        del total_B
+
+        B0_data = BuUu
+        del BuUu
+        B1_data = 1/u0_data * (primitive_data['B1'] + B0_data * u1_data)
+        B2_data = 1/u0_data * (primitive_data['B2'] + B0_data * u2_data)
+        B3_data = 1/u0_data * (primitive_data['B3'] + B0_data * u3_data)
+
+        KuUu = np.zeros((nsteps, npx))
+
+        for i in tqdm(range(nsteps)):
+            KuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ total_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ S[i,:,4:].reshape(npx,4,1)).reshape(npx)
+
+        total_B = np.array([B0_data, B1_data, B2_data, B3_data])
+        tot_B = np.transpose(total_B, (1,2,0))
+
+        KuBu = np.zeros((nsteps, npx))
+
+        for i in tqdm(range(nsteps)):
+            KuBu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ S[i,:,4:].reshape(npx,4,1)).reshape(npx)
+
+        BuBu = np.zeros((nsteps, npx))
+
+        for i in tqdm(range(nsteps)):
+            BuBu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ tot_B[i,:,:].reshape(npx,4,1)).reshape(npx)
+
+        del tot_B
+        del total_B
+
+        ## TODO remove UdotU
+        UuUu = np.zeros((nsteps, npx))
+
+        del total_u
+        total_u = np.array([u0_data, u1_data, u2_data, u3_data])
+        tot_u = np.transpose(total_u, (1, 2, 0))
+
+        for i in tqdm(range(nsteps)):
+            UuUu[i,:] = ((vec_metric(S[i,:,:4], self.bhspin) @ tot_u[i,:,:].reshape(npx,4,1)).reshape(npx,1,4) @ tot_u[i,:,:].reshape(npx,4,1)).reshape(npx)
+
+        def compute_pitch_angle(KuUu, KuBu, BuBu):
+
+            angle = KuBu/(np.abs(KuUu) * np.sqrt(BuBu))
+
+            index = np.where(BuBu == 0)
+            angle[index[0],index[1]] = np.cos(np.pi/2)
+
+            index = np.where(abs(angle) > 1.0)
+            angle[index[0],index[1]] = angle[index[0],index[1]]/abs(angle[index[0],index[1]])
+
+            return np.arccos(angle)
+
+        observer_angle = compute_pitch_angle(KuUu,KuBu,BuBu)
+
+        tensorial_data = dict(
+            ucon = np.array([u0_data, u1_data, u2_data, u3_data]),
+            bcon = np.array([B0_data, B1_data, B2_data, B3_data]),
+            pitch_angle = observer_angle,
+            udotu = UuUu,
+            kdotu = KuUu,
+            kdotb = KuBu,
+            bdotb = BuBu,
+            UuUu = UuUu,
+            final_M = final_M
         )
 
         return tensorial_data
