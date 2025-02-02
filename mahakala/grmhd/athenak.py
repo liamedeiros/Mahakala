@@ -23,8 +23,6 @@ THE SOFTWARE.
 import numpy as np
 import h5py
 
-from jax.scipy.interpolate import RegularGridInterpolator as jaxRegularGridInterpolator
-
 from tqdm import tqdm
 
 from jax import lax
@@ -34,7 +32,7 @@ from jax import jit, vmap
 import time
 
 from mahakala.geodesics import metric, imetric
-
+from mahakala.grmhd.grmhd import GRMHDFluidModel
 
 KB = 1.3807e-16
 CL = 2.99792458e10
@@ -54,7 +52,7 @@ def vec_imetric(X, bhspin):
     return vmap(imetric, in_axes=(0, None))(X, bhspin)
 
 
-class AthenakFluidModel:
+class AthenakFluidModel(GRMHDFluidModel):
 
     def __init__(self, grmhd_filename, bhspin):
         self.load_athenak_meshblocks(grmhd_filename)

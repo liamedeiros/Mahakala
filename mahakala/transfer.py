@@ -68,21 +68,30 @@ def solve_specific_intensity_jax(N, synemiss_data, absorption_data, KuUu, dt, M_
 
     return I_new
 
-def emission_coefficient(Ne, t_electron, B, nu, beta, angle):
 
-    thetae = (KB * t_electron)/( ME * CL**2)
+def synchrotron_emissivity_raw(Ne, Theta_e, B, nu, pitch_angle):
+    """
+    Compute thermal synchrotron emissivity given raw arrays of 
+    - Ne: electron density
+    - Theta_e: dimensionless electron temperature
+    - B: magnetic field
+    - nu: local frequency
+    - pitch_angle: pitch angle
+
+    Returns:
+    - emissivity: thermal synchrotron in cgs
+    """
 
     # Eq [2]
     nuc = 2.79925e6*B
-    nus = (2./9.)*nuc*thetae*thetae*np.sin(angle)
+    nus = (2./9.)*nuc*Theta_e*Theta_e*np.sin(pitch_angle)
 
     # Eq [56]
-    X=nu/nus
+    X = nu/nus
+    var = np.exp(-np.power(X, 1./3.))
+    emissivity = Ne*nus*np.power(jnp.sqrt(X)+np.power(2., 11./12.)*np.power(X, 1./6.), 2.)/(special.kn(2,1./Theta_e))
 
-    var = np.exp(-np.power(X,1./3.))
-    synemiss = Ne*nus*np.power(jnp.sqrt(X)+np.power(2., 11./12.)*np.power(X,1./6.),2.)/(special.kn(2,1./thetae))
-
-    return synemiss  * var * np.sqrt(2) * np.pi * EC**2 /(3 * CL)
+    return emissivity * var * np.sqrt(2) * np.pi * EC**2 / (3. * CL)
 
 
 def absorption_coefficient(t_electron, je, nu, Beta):
