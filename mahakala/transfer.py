@@ -68,35 +68,20 @@ def solve_specific_intensity_jax(N, synemiss_data, absorption_data, KuUu, dt, M_
 
     return I_new
 
-#@jit
-def synchrotron_emissivity(Ne, Theta_e, B, pitch_angle, nu):
+
+def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu):
     """
-    TODO: documentation etc.
+    Compute thermal synchrotron emissivity and absorptivity given
+    - Ne: electron density
+    - Theta_e: dimensionless electron temperature
+    - B: magnetic field
+    - nu: local frequency
+    - pitch_angle: pitch angle
+
+    Returns:
+    - emissivity: thermal synchrotron in cgs
+    - absorptivity: thermal synchrotron in cgs
     """
-
-    import time
-
-    t0 = time.time()
-
-    # Eq [2]
-    nuc = 2.79925e6*B
-    nus = (2./9.)*nuc*Theta_e*Theta_e*np.sin(pitch_angle)
-
-    # Eq [56]
-    X = nu/nus
-    var = np.exp(-np.power(X, 1./3.))
-    emissivity = Ne*nus*np.power(jnp.sqrt(X)+np.power(2., 11./12.)*np.power(X, 1./6.), 2.)/(special.kn(2,1./Theta_e))
-    emissivity = emissivity * var * np.sqrt(2) * np.pi * EC**2 / (3. * CL)
-    emissivity = emissivity.at[np.isnan(emissivity)].set(0)
-
-    t1 = time.time()
-
-    print(t1 - t0)
-
-    return emissivity
-
-@jit
-def synchrotron_emissivity_jax(Ne, Theta_e, B, pitch_angle, nu):
 
     nuc = 2.79925e6 * B
     nus = (2.0 / 9.0) * nuc * Theta_e**2 * jnp.sin(pitch_angle)
@@ -108,36 +93,11 @@ def synchrotron_emissivity_jax(Ne, Theta_e, B, pitch_angle, nu):
     emissivity = Ne * nus * term**2 / (2.*Theta_e**2.)  # approximation for K2
     emissivity = emissivity * var * jnp.sqrt(2) * jnp.pi * EC**2 / (3.0 * CL)
 
-    emissivity = emissivity.at[np.isnan(emissivity)].set(0)
+    emissivity = emissivity.at[jnp.isnan(emissivity)].set(0)
 
-    return emissivity
+    B_nu = (2*HPL*nu**3/CL**2)/(jnp.exp(HPL*nu/(ME*CL*CL*Theta_e)) - 1)
 
-
-def synchrotron_emissivity_raw(Ne, Theta_e, B, nu, pitch_angle):
-    """
-    Compute thermal synchrotron emissivity given raw arrays of 
-    - Ne: electron density
-    - Theta_e: dimensionless electron temperature
-    - B: magnetic field
-    - nu: local frequency
-    - pitch_angle: pitch angle
-
-    Returns:
-    - emissivity: thermal synchrotron in cgs
-    """
-
-    # Eq [2]
-    nuc = 2.79925e6*B
-    nus = (2./9.)*nuc*Theta_e*Theta_e*np.sin(pitch_angle)
-
-    # Eq [56]
-    X = nu/nus
-    var = np.exp(-np.power(X, 1./3.))
-    emissivity = Ne*nus*np.power(jnp.sqrt(X)+np.power(2., 11./12.)*np.power(X, 1./6.), 2.)/(special.kn(2,1./Theta_e))
-    emissivity = emissivity * var * np.sqrt(2) * np.pi * EC**2 / (3. * CL)
-    emissivity = emissivity.at[np.isnan(emissivity)].set(0)
-
-    return emissivity
+    return emissivity, emissivity/B_nu
 
 
 def absorption_coefficient(t_electron, je, nu, Beta):

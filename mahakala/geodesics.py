@@ -29,9 +29,10 @@ from jax.lib import xla_bridge
 print('jax is using the', xla_bridge.get_backend().platform)
 
 
-def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul, pixels_per_side, camera_type='grid'):
+def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul,
+                                   pixels_per_side, camera_type='grid'):
     '''
-    @ Brief Return a list of photon positions and wavevectors over the image plane.
+    @ Brief Returns list of photon positions and wavevectors across image.
 
     bhspin - normalized black hole spin parameter
     inclination - in degrees
@@ -42,20 +43,21 @@ def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul, pixels
     camera_type - default=grid or equator (e.g., for studying cross sections)
     '''
 
-    s0_x, s0_v = get_initial_grid(inclination, distance, ll, ul, pixels_per_side, camera_type)
+    s0_x, s0_v = get_initial_grid(inclination, distance, ll, ul,
+                                  pixels_per_side, camera_type)
 
     return initial_condition(s0_x, s0_v, bhspin)
 
 
 def Nullify(metric, bhspin, p=1):
     '''
-    !@brief This functions takes the metric as a parameter, and then nullifies the velocity vector to make it a null
-     geodesic
+    !@brief This functions takes the metric as a parameter, and then nullifies
+    the velocity vector to make it a null geodesic.
     '''
     assert p > 0
 
     @jit
-    def nullify(x, v): # closure on `p`
+    def nullify(x, v):  # closure on `p`
 
         g = metric(x, bhspin)
         A = v[:p] @ g[:p,:p] @ v[:p]
@@ -63,7 +65,7 @@ def Nullify(metric, bhspin, p=1):
         C = v[p:] @ g[p:,p:] @ v[p:]
 
         d1, d2 = quadratic(A, b, C)
-        S      = jnp.select([d1 > 0, d2 > 0], [d1, d2], jnp.nan)
+        S = jnp.select([d1 > 0, d2 > 0], [d1, d2], jnp.nan)
 
         return jnp.concatenate([v[:p], v[p:] / S])
 
@@ -81,7 +83,7 @@ def quadratic(A, b, C):
     AC = A * C
     dd = jnp.select([~jnp.isclose(bb, AC)], [bb - AC], 0)
     bs = jnp.heaviside(b, 1)
-    D  = - (b + bs * jnp.sqrt(dd))
+    D = - (b + bs * jnp.sqrt(dd))
     x1 = D / A
     x2 = C / D
     return jnp.minimum(x1, x2), jnp.maximum(x1, x2)
@@ -90,12 +92,12 @@ def quadratic(A, b, C):
 @jit
 def metric(x, bhspin):
     '''
-    !@brief Calculates the Kerr-schild metric in Cartesian Co-ordinates.
-    @param x 1-D jax array with 4 elements corresponding to {t,x,y,z} which is equivalent to 4-position vector
+    Calculates the Cartesian Kerr metric in Cartesian Kerr-Schild coordinates.
+    @param x 1-D jax array with 4 elements corresponding to {t,x,y,z}
     @returns a 4 X 4 two dimensional array reprenting the metric
 
     '''
-    eta = jnp.asarray([[-1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+    eta = jnp.diag(jnp.array([-1, 1, 1, 1]))
     a = bhspin
     aa = a * a
     zz = x[3]*x[3]
@@ -103,8 +105,8 @@ def metric(x, bhspin):
     rr = jnp.sqrt(kk * kk + aa * zz ) + kk
     r = jnp.sqrt(rr)
     f = (2.0 * rr * r)/(rr * rr + aa * zz)
-    l = jnp.array([1, (r * x[1] + a * x[2])/(rr + aa) , (r* x[2] - a * x[1])/(rr + aa) , x[3]/r])
-    return eta + f * (l[:,jnp.newaxis] * l[jnp.newaxis,:])
+    l = jnp.array([1, (r * x[1] + a * x[2])/(rr + aa) , (r* x[2] - a * x[1])/(rr + aa), x[3]/r])
+    return eta + f * (l[:, jnp.newaxis] * l[jnp.newaxis, :])
 
 
 def get_camera_pixel(inclination, distance, radius, angle):
@@ -130,7 +132,7 @@ def get_camera_pixel(inclination, distance, radius, angle):
     return s0_x, s0_v
 
 
-def get_initial_grid(i,d,ll,ul,spacing, camera_type):
+def get_initial_grid(i, d, ll, ul, spacing, camera_type):
     '''
     !@brief Defines the initial grid of photons that will be thrown towards the Black hole
 
@@ -152,24 +154,23 @@ def get_initial_grid(i,d,ll,ul,spacing, camera_type):
         grid_list = np.linspace(ll, ul, 2 * spacing + 1)[1::2]
 
         z = 0 * jnp.ones(len(grid_list)**2)
-
-        x,y = jnp.meshgrid(grid_list,grid_list,indexing = 'ij')
+        x, y = jnp.meshgrid(grid_list, grid_list, indexing='ij')
 
         x = x.flatten()
         y = y.flatten()
 
-        origin_BH = Image_to_BH(0,0,0,i,d)
-        temp_coord = perpendicular([x,y])
+        origin_BH = Image_to_BH(0, 0, 0, i, d)
+        temp_coord = perpendicular([x, y])
 
-        init_BH = Image_to_BH(x,y,z,i,d)
-        perp_BH = Image_to_BH(temp_coord[0],temp_coord[1],0 * jnp.ones(len(grid_list)**2),i,d)
+        init_BH = Image_to_BH(x, y, z, i, d)
+        perp_BH = Image_to_BH(temp_coord[0], temp_coord[1], 0 * jnp.ones(len(grid_list)**2), i, d)
 
         vec1 = - init_BH.T + origin_BH
         vec2 = perp_BH - init_BH
 
-        k_vec = np.cross(vec1,vec2.T)
-        s0_x = np.array([0 * np.ones(len(grid_list)**2),init_BH[0].flatten(), init_BH[1].flatten(), init_BH[2].flatten()])
-        s0_v = np.array([1 * np.ones(len(grid_list)**2),k_vec.T[0].flatten(), k_vec.T[1].flatten(), k_vec.T[2].flatten()])
+        k_vec = np.cross(vec1, vec2.T)
+        s0_x = np.array([0 * np.ones(len(grid_list)**2), init_BH[0].flatten(), init_BH[1].flatten(), init_BH[2].flatten()])
+        s0_v = np.array([1 * np.ones(len(grid_list)**2), k_vec.T[0].flatten(), k_vec.T[1].flatten(), k_vec.T[2].flatten()])
 
         return s0_x, s0_v
 
@@ -182,7 +183,7 @@ def get_initial_grid(i,d,ll,ul,spacing, camera_type):
         s0_x[2] = grid_list
 
         # initialize wavevectors
-        s0_v = np.ones((4,len(grid_list)))
+        s0_v = np.ones((4, len(grid_list)))
         s0_v[2] = 0
         s0_v[3] = 0
 
@@ -192,39 +193,19 @@ def get_initial_grid(i,d,ll,ul,spacing, camera_type):
         print(f'Unexpected camera type \"{camera_type}\". Please choose either "grid" or "equator"')
 
 
-def Image_to_BH(x,y,z,i,d):
+def Image_to_BH(x, y, z, i, d):
     i = i * np.pi/180
     x_BH = -y * np.cos(i) + z * np.sin(i) + d * np.sin(i)
     y_BH = x
     z_BH = y * np.sin(i) + z * np.cos(i) + d * np.cos(i)
-    return np.array([x_BH,y_BH,z_BH])
+    return np.array([x_BH, y_BH, z_BH])
 
 
-def perpendicular( a ) :
+def perpendicular(a):
     b = np.empty_like(a)
     b[0] = -(0-a[1]) + a[0]
     b[1] = (0-a[0]) + a[1]
     return b
-
-#@jit
-def initial_condition_old(s0_x, s0_v, bhspin):
-    '''
-    !@brief This function returns the correct initial null goedesic conditions for the grid of photons
-    '''
-
-    import time
-    #print('a', time.time())
-    nullify = Nullify(metric, bhspin)
-
-    #print('b', time.time())
-
-    s0 = []
-    for i in range(len(s0_x.T)):
-        s0.append(np.concatenate([s0_x[:, i], nullify(s0_x[:, i], s0_v[:, i])]))
-
-    #print('c', time.time())
-
-    return np.array(s0)
 
 
 def initial_condition(s0_x, s0_v, bhspin):
@@ -295,19 +276,13 @@ def RK4_gen(state1, dt, bhspin):
     val = len(state1)
     ans1 = vectorized_rhs(state1, bhspin)
 
-    k1  = jnp.multiply(dt.reshape(val,1),ans1)
-
+    k1 = jnp.multiply(dt.reshape(val, 1), ans1)
     ans1 = vectorized_rhs(state1 + 0.5 * k1, bhspin)
-
-    k2  = jnp.multiply(dt.reshape(val,1),ans1)
-
+    k2 = jnp.multiply(dt.reshape(val, 1), ans1)
     ans1 = vectorized_rhs(state1 + 0.5 * k2, bhspin)
-
-    k3  = jnp.multiply(dt.reshape(val,1),ans1)
-
-    ans1 = vectorized_rhs(state1 +  k3, bhspin)
-
-    k4  = jnp.multiply(dt.reshape(val,1),ans1)
+    k3 = jnp.multiply(dt.reshape(val, 1), ans1)
+    ans1 = vectorized_rhs(state1 + k3, bhspin)
+    k4 = jnp.multiply(dt.reshape(val, 1), ans1)
 
     new_state1 = state1 + 1/6 * (k1 + 2*k2 + 2*k3 + k4)
     return new_state1
@@ -327,15 +302,15 @@ def rhs(state1, bhspin):
     @returns An n * 8 dimensional array where n = number of photons, 8 = 8 = 4 velocity coordinates + 4 acceleration coordinates
     '''
 
-    x  = state1[:4]
-    v  = state1[4:]
+    x = state1[:4]
+    v = state1[4:]
 
     ig = imetric(x, bhspin)
     jg = jit(jacfwd(metric))(x, bhspin)
 
-    a  = ig @ (- (jg @ v) @ v + 0.5 * v @ (v @ jg))
+    a = ig @ (- (jg @ v) @ v + 0.5 * v @ (v @ jg))
 
-    return jnp.concatenate([v,a]) #a - a[0] * v
+    return jnp.concatenate([v,a])
 
 
 @jit
@@ -353,18 +328,18 @@ def radius_EH(a_spin):
     return 1 + np.sqrt(1-a_spin**2)
 
 
-def select_photons_integrator(N_time_steps, inc, angle, radius, bhspin, distance = 1000):
-    s0_x, s0_v = get_camera_pixel(inc,distance,radius,angle)
-    init_one   = initial_condition(s0_x, s0_v, bhspin)
-    S,final_dt = geodesic_integrator(N_time_steps,init_one,40,1e-2,bhspin)
+def select_photons_integrator(N_time_steps, inc, angle, radius, bhspin, distance=1000):
+    s0_x, s0_v = get_camera_pixel(inc, distance, radius, angle)
+    init_one = initial_condition(s0_x, s0_v, bhspin)
+    S, final_dt = geodesic_integrator(N_time_steps, init_one, 40, 1e-2, bhspin)
     r = radius_cal(S, bhspin)
-    return(np.nanmin(r, axis=0)) # returns minimum distance from BH
+    return np.nanmin(r, axis=0)  # returns minimum distance from BH
 
 
 def bisection_shadow_par(bhspin, inc, num_angles, N_time_steps=2000, uncertainty_allowed=0.001, max_it=40):
-    inner  = np.zeros(num_angles) + 0.5
-    outer  = np.zeros(num_angles) + 10
-    error  = outer - inner
+    inner = np.zeros(num_angles) + 0.5
+    outer = np.zeros(num_angles) + 10
+    error = outer - inner
     angles = np.arange(num_angles)/num_angles*2.*np.pi
 
     reh = 1. + np.sqrt(1. - bhspin*bhspin)
@@ -372,16 +347,15 @@ def bisection_shadow_par(bhspin, inc, num_angles, N_time_steps=2000, uncertainty
 
     counter = 0
     while (np.max(error) > uncertainty_allowed) and (counter < max_it):
-        final_mid       = select_photons_integrator(N_time_steps, inc, angles, (outer-inner)/2+inner, bhspin)
-        fell            = np.where(final_mid < reh)
-        got_away        = np.where(final_mid > reh)
-        inner[fell]     = (outer[fell]-inner[fell])/2+inner[fell]
+        final_mid = select_photons_integrator(N_time_steps, inc, angles, (outer-inner)/2+inner, bhspin)
+        fell = np.where(final_mid < reh)
+        got_away = np.where(final_mid > reh)
+        inner[fell] = (outer[fell]-inner[fell])/2+inner[fell]
         outer[got_away] = (outer[got_away]-inner[got_away])/2+inner[got_away]
         error = outer - inner
-        counter+=1
+        counter += 1
 
     angles = np.append(angles, angles[0])
-    inner  = np.append(inner,   inner[0])
+    inner = np.append(inner, inner[0])
 
-    return(angles, inner)
-
+    return (angles, inner)
