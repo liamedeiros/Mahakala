@@ -20,20 +20,13 @@ THE SOFTWARE.
 """
 
 import numpy as np
-from tqdm import tqdm
 
 from jax import numpy as jnp
 from jax import jit, jacfwd, vmap, lax
-from jax.numpy import dot
 from jax.numpy.linalg import inv
-##### This will tell whether we are using CPU or GPU #########
+
 from jax.lib import xla_bridge
-print(xla_bridge.get_backend().platform)
-
-import jax
-#jax.config.update("jax_disable_jit", True)
-
-from jax.debug import print as jaxprint
+print('jax is using the', xla_bridge.get_backend().platform)
 
 
 def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul, pixels_per_side, camera_type='grid'):

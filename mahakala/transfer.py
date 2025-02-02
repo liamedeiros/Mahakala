@@ -68,6 +68,50 @@ def solve_specific_intensity_jax(N, synemiss_data, absorption_data, KuUu, dt, M_
 
     return I_new
 
+#@jit
+def synchrotron_emissivity(Ne, Theta_e, B, pitch_angle, nu):
+    """
+    TODO: documentation etc.
+    """
+
+    import time
+
+    t0 = time.time()
+
+    # Eq [2]
+    nuc = 2.79925e6*B
+    nus = (2./9.)*nuc*Theta_e*Theta_e*np.sin(pitch_angle)
+
+    # Eq [56]
+    X = nu/nus
+    var = np.exp(-np.power(X, 1./3.))
+    emissivity = Ne*nus*np.power(jnp.sqrt(X)+np.power(2., 11./12.)*np.power(X, 1./6.), 2.)/(special.kn(2,1./Theta_e))
+    emissivity = emissivity * var * np.sqrt(2) * np.pi * EC**2 / (3. * CL)
+    emissivity = emissivity.at[np.isnan(emissivity)].set(0)
+
+    t1 = time.time()
+
+    print(t1 - t0)
+
+    return emissivity
+
+@jit
+def synchrotron_emissivity_jax(Ne, Theta_e, B, pitch_angle, nu):
+
+    nuc = 2.79925e6 * B
+    nus = (2.0 / 9.0) * nuc * Theta_e**2 * jnp.sin(pitch_angle)
+    X = nu / nus
+    var = jnp.exp(- X**(1/3))
+
+    term = jnp.sqrt(X) + (2.0**(11/12)) * X**(1/6)
+
+    emissivity = Ne * nus * term**2 / (2.*Theta_e**2.)  # approximation for K2
+    emissivity = emissivity * var * jnp.sqrt(2) * jnp.pi * EC**2 / (3.0 * CL)
+
+    emissivity = emissivity.at[np.isnan(emissivity)].set(0)
+
+    return emissivity
+
 
 def synchrotron_emissivity_raw(Ne, Theta_e, B, nu, pitch_angle):
     """
@@ -90,8 +134,10 @@ def synchrotron_emissivity_raw(Ne, Theta_e, B, nu, pitch_angle):
     X = nu/nus
     var = np.exp(-np.power(X, 1./3.))
     emissivity = Ne*nus*np.power(jnp.sqrt(X)+np.power(2., 11./12.)*np.power(X, 1./6.), 2.)/(special.kn(2,1./Theta_e))
+    emissivity = emissivity * var * np.sqrt(2) * np.pi * EC**2 / (3. * CL)
+    emissivity = emissivity.at[np.isnan(emissivity)].set(0)
 
-    return emissivity * var * np.sqrt(2) * np.pi * EC**2 / (3. * CL)
+    return emissivity
 
 
 def absorption_coefficient(t_electron, je, nu, Beta):
