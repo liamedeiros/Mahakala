@@ -554,16 +554,16 @@ class AthenakFluidModel:
         # get which meshblock each geodesic point is in
         mb_indices = np.ones((nsteps, npx), dtype=int) * -1
 
-        x1_extents = np.array([[self.x1f[mbi][0], self.x1f[mbi][-1]] for mbi in range(nmb)])
-        x2_extents = np.array([[self.x2f[mbi][0], self.x2f[mbi][-1]] for mbi in range(nmb)])
-        x3_extents = np.array([[self.x3f[mbi][0], self.x3f[mbi][-1]] for mbi in range(nmb)])
+        ext_x1 = np.array([[self.x1f[mbi][0], self.x1f[mbi][-1]] for mbi in range(nmb)])
+        ext_x2 = np.array([[self.x2f[mbi][0], self.x2f[mbi][-1]] for mbi in range(nmb)])
+        ext_x3 = np.array([[self.x3f[mbi][0], self.x3f[mbi][-1]] for mbi in range(nmb)])
 
         t0 = time.time()
 
         for mbi in tqdm(range(nmb)):
-            mb_mask = (x1_extents[mbi][0] < S[..., 1]) & (S[..., 1] <= x1_extents[mbi][1])
-            mb_mask &= (x2_extents[mbi][0] < S[..., 2]) & (S[..., 2] <= x2_extents[mbi][1])
-            mb_mask &= (x3_extents[mbi][0] < S[..., 3]) & (S[..., 3] <= x3_extents[mbi][1])
+            mb_mask = (ext_x1[mbi][0] < S[..., 1]) & (S[..., 1] <= ext_x1[mbi][1])
+            mb_mask &= (ext_x2[mbi][0] < S[..., 2]) & (S[..., 2] <= ext_x2[mbi][1])
+            mb_mask &= (ext_x3[mbi][0] < S[..., 3]) & (S[..., 3] <= ext_x3[mbi][1])
             mb_indices[mb_mask] = mbi
 
         mb_indices = jnp.array(mb_indices)
@@ -622,24 +622,29 @@ class AthenakFluidModel:
             dbb = dbba + (dbbb - dbba) * x1_delta[:, None]
             da = daa + (dab - daa) * x2_delta[:, None]
             db = dba + (dbb - dba) * x2_delta[:, None]
-            prim_data_at_this_step = da + (db - da) * x3_delta[:, None]
+            prims = da + (db - da) * x3_delta[:, None]
 
-            return _, prim_data_at_this_step
+            # update prim array to be zero wherever the meshblock index is -1
+            condition = mb_indices[i] == -1
+            condition = jnp.broadcast_to(condition[:, None], prims.shape)
+            prims = lax.select(condition, jnp.zeros_like(prims), prims)
 
-        _, prim_data = lax.scan(body_fn, None, jnp.arange(nsteps))
+            return _, prims
+
+        _, prims = lax.scan(body_fn, None, jnp.arange(nsteps))
 
         t2 = time.time()
         print(t2 - t1)
 
         primitive_data = dict(
-            dens=prim_data[..., self.get_index_for_primitive_by_name('dens')],
-            u=prim_data[..., self.get_index_for_primitive_by_name('eint')],
-            U1=prim_data[..., self.get_index_for_primitive_by_name('velx')],
-            U2=prim_data[..., self.get_index_for_primitive_by_name('vely')],
-            U3=prim_data[..., self.get_index_for_primitive_by_name('velz')],
-            B1=prim_data[..., self.get_index_for_primitive_by_name('bcc1')],
-            B2=prim_data[..., self.get_index_for_primitive_by_name('bcc2')],
-            B3=prim_data[..., self.get_index_for_primitive_by_name('bcc3')],
+            dens=prims[..., self.get_index_for_primitive_by_name('dens')],
+            u=prims[..., self.get_index_for_primitive_by_name('eint')],
+            U1=prims[..., self.get_index_for_primitive_by_name('velx')],
+            U2=prims[..., self.get_index_for_primitive_by_name('vely')],
+            U3=prims[..., self.get_index_for_primitive_by_name('velz')],
+            B1=prims[..., self.get_index_for_primitive_by_name('bcc1')],
+            B2=prims[..., self.get_index_for_primitive_by_name('bcc2')],
+            B3=prims[..., self.get_index_for_primitive_by_name('bcc3')],
         )
 
         return primitive_data
