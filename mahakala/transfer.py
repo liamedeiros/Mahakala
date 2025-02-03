@@ -35,14 +35,88 @@ HPL = 6.6261e-27
 GNEWT = 6.6743e-8
 
 
+def specific_intensity_aaa(N,synemiss_data,absorption_data,nu,KuUu,dt):
+    I_new = np.zeros(len(synemiss_data[0]))
+    I_list = np.zeros((N,2048))
+    for i in range(N-1,0,-1):
+        val =  (-(dt[i-1,:]) * (G*M_BH/c**2) * (synemiss_data[i,:]/abs(KuUu[i,:])**2 -  (abs(KuUu)[i,:] * absorption_data[i,:] * I_new)))
+        I_new = I_new + val
+
+        I_list[N-i,:] = val
+    return I_new, I_list
+
+def specific_intensity_bbb(N,synemiss_data,absorption_data,nu,KuUu,dt):
+    '''
+    !@brief This function calculates the specific intensity of the plasma
+    @param N The number of photons
+    @param synemiss_data The synchrotron emissivity of the plasma
+    @param absorption_data The absorption coefficient of the plasma
+    @param nu The frequency of the photon
+    @param KuUu The 4-velocity of the photon
+    @param dt The time step
+    @returns The specific intensity of the plasma
+    '''
+    I_new = np.zeros(len(synemiss_data[0]))
+    I_list = np.zeros((N,2048))
+    for i in range(N-1,0,-1):
+        val =  (-(dt[i-1,:]) * (G*M_BH/c**2) * (synemiss_data[i,:]/abs(KuUu[i,:])**2 -  (abs(KuUu)[i,:] * absorption_data[i,:] * I_new)))
+        I_new = I_new + val
+
+        I_list[N-i,:] = val
+    return I_new, I_list
+
+"""
+KuUu = local_nu / observing_frequency
+
+EE = 4.8032e-10
+KB = 1.3807e-16
+CL = 2.99792458e10
+ME = 9.1094e-28
+HPL = 6.6261e-27
+GNEWT = 6.6743e-8
+
+N = len(emissivity)
+I_new = np.zeros(len(emissivity[0]))
+I_list = np.zeros((N, len(emissivity[0])))
+for i in range(N-1,0,-1):
+    val =  (-(final_dt[i-1,:]) * (GNEWT*M_bh/CL**2) * (emissivity[i,:]/abs(KuUu[i,:])**2 -  (abs(KuUu)[i,:] * absorptivity[i,:] * I_new)))
+    I_new = I_new + val
+
+    I_list[N-i,:] = val
+    """
+
+def solve_specific_intensity_newest(emissivity, absorptivity, dt, nu, observing_frequency, L_unit):
+    N = len(emissivity)
+    I_new = np.zeros(len(emissivity[0]))
+    I_list = []
+    KuUu = nu / observing_frequency
+    for i in range(N-1, 0, -1):
+        val = (-(dt[i-1, :]) * L_unit * (emissivity[i, :]/abs(KuUu[i])**2 - (abs(KuUu)[i] * absorptivity[i] * I_new)))
+        I_new = I_new + val
+        I_list.append(val)
+    return I_new, np.array(I_list)
+
+
+def solve_specific_intensity_mine(invariant_emissivity, invariant_absorptivity, dt):
+    ## this is the one that we think is working for now. seems to agree (in terms of code) with others
+    ## ... but running tests with ipole now.
+    N = invariant_emissivity.shape[0]
+    I_invariant = np.zeros(invariant_emissivity.shape[1])
+    I_invariant_list = []
+    for i in range(N-1, 0, -1):
+        I_invariant = I_invariant + (- dt[i-1] * (invariant_emissivity[i] - invariant_absorptivity[i] * I_invariant))
+        I_invariant_list.append(I_invariant)
+    return np.array(I_invariant_list)
+
+
 def solve_specific_intensity(invariant_emissivity, invariant_absorptivity, dt, observing_frequency):
     ## this is the one that we think is working for now. seems to agree (in terms of code) with others
     ## ... but running tests with ipole now.
     N = invariant_emissivity.shape[0]
     I_new = np.zeros(invariant_emissivity.shape[1])
     final_I = []
-    for i in range(N-1,0,-1):
-        I_new = I_new + (- dt[i-1] * (invariant_emissivity[i,:] -  (invariant_absorptivity[i,:] * I_new)))
+    for i in range(N-1, 0, -1):
+        I_new = I_new + (- dt[i-1] * (invariant_emissivity[i,:] - (invariant_absorptivity[i,:] * I_new)))
         final_I.append(I_new)
     return np.array(final_I) * observing_frequency**3.
 
@@ -80,7 +154,7 @@ def solve_specific_intensity_jax(N, synemiss_data, absorption_data, KuUu, dt, M_
     return I_new
 
 
-def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu, invariant=True):
+def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu, invariant=True, rescale_nu=1.):
     """
     Compute thermal synchrotron emissivity and absorptivity given
     - Ne: electron density
@@ -89,6 +163,13 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu, invariant=True):
     - nu: local frequency
     - pitch_angle: pitch angle
     - invariant: whether to return invariant coefficients (default = True)
+    - rescale_nu: rescale frequency by this factor (default = 1.)
+
+    The rescale_nu factor is useful for dealing with numerical precision
+    issues when computing invariant quantities and the frequency is very
+    large. Using this variable will change how to interpret the specific
+    intensities (i.e., they will *not* need to be rescaled by nu^3). The
+    best-guess for a trial rescaling factor is 1/observing_frequency.
 
     Returns:
     - emissivity: thermal synchrotron in cgs
@@ -120,8 +201,11 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu, invariant=True):
     absorptivity = emissivity / B_nu
 
     if invariant:
+        #kdotu = nu * rescale_nu
+        #emissivity = emissivity  # / nu**2.  # em / nu^2
+        #absorptivity = nu**3. * absorptivity  # nu * abs
         emissivity = emissivity / nu**2.
-        absorptivity = nu * absorptivity
+        absorptivity = absorptivity * nu
 
     emissivity = emissivity.at[jnp.isnan(emissivity)].set(0)
     absorptivity = absorptivity.at[jnp.isnan(absorptivity)].set(0)
