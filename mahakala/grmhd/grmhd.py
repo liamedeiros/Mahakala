@@ -39,12 +39,14 @@ class GRMHDFluidModel:
 
     def get_units(self, M_BH, mass_scale):
         L_unit = GNEWT * M_BH / CL**2
+        T_unit = L_unit / CL
         dens_unit = mass_scale / L_unit**3
         Ne_unit = dens_unit / (MP + ME)
         B_unit = CL * np.sqrt(4. * np.pi * dens_unit)
 
         units = dict(
             L_unit=L_unit,
+            T_unit=T_unit,
             dens_unit=dens_unit,
             Ne_unit=Ne_unit,
             B_unit=B_unit

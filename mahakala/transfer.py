@@ -34,8 +34,19 @@ ME = 9.1094e-28
 HPL = 6.6261e-27
 GNEWT = 6.6743e-8
 
-#@jit
-def solve_specific_intensity(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
+
+def solve_specific_intensity(invariant_emissivity, invariant_absorptivity, dt, observing_frequency):
+    ## this is the one that we think is working for now. seems to agree (in terms of code) with others
+    ## ... but running tests with ipole now.
+    N = invariant_emissivity.shape[0]
+    I_new = np.zeros(invariant_emissivity.shape[1])
+    final_I = []
+    for i in range(N-1,0,-1):
+        I_new = I_new + (- dt[i-1] * (invariant_emissivity[i,:] -  (invariant_absorptivity[i,:] * I_new)))
+        final_I.append(I_new)
+    return np.array(final_I) * observing_frequency**3.
+
+def solve_specific_intensity_old(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
     I_new = np.zeros(synemiss_data.shape[1])
     range_values = jnp.array(range(N-1, 0, -1))
     for i in range_values:
@@ -69,7 +80,7 @@ def solve_specific_intensity_jax(N, synemiss_data, absorption_data, KuUu, dt, M_
     return I_new
 
 
-def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu):
+def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu, invariant=True):
     """
     Compute thermal synchrotron emissivity and absorptivity given
     - Ne: electron density
@@ -77,6 +88,7 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu):
     - B: magnetic field
     - nu: local frequency
     - pitch_angle: pitch angle
+    - invariant: whether to return invariant coefficients (default = True)
 
     Returns:
     - emissivity: thermal synchrotron in cgs
@@ -96,7 +108,6 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu):
     emissivity = Ne * nus * term**2 / (2.*Theta_e**2.)  # approximation for K2
     emissivity = emissivity * var * jnp.sqrt(2) * jnp.pi * EE**2 / (3.0 * CL)
 
-    emissivity = emissivity.at[jnp.isnan(emissivity)].set(0)
     emissivity = emissivity.at[nu > nu_max].set(0)
     emissivity = emissivity.at[Theta_e < Theta_e_min].set(0)
 
@@ -107,6 +118,12 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu):
     B_nu = (2. * HPL * nu**3. / B_denominator) / CL**2.
 
     absorptivity = emissivity / B_nu
+
+    if invariant:
+        emissivity = emissivity / nu**2.
+        absorptivity = nu * absorptivity
+
+    emissivity = emissivity.at[jnp.isnan(emissivity)].set(0)
     absorptivity = absorptivity.at[jnp.isnan(absorptivity)].set(0)
 
     return emissivity, absorptivity
