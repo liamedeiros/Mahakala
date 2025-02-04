@@ -34,12 +34,7 @@ import time
 from mahakala.geodesics import metric, imetric
 from mahakala.grmhd.grmhd import GRMHDFluidModel
 
-KB = 1.3807e-16
-CL = 2.99792458e10
-ME = 9.1094e-28
-EC = 4.8032e-10
-HPL = 6.6261e-27
-GNEWT = 6.6743e-8
+#from mahakala.units import CL, ME
 
 
 @jit

@@ -19,19 +19,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-from mahakala.geodesics import initialize_geodesics_at_camera
-from mahakala.geodesics import geodesic_integrator
-from mahakala.geodesics import bisection_shadow_par
+# universal constants
+EE = 4.8032e-10
+KB = 1.3807e-16
+CL = 2.99792458e10
+ME = 9.1094e-28
+HPL = 6.6261e-27
+GNEWT = 6.6743e-8
 
-from mahakala.transfer import synchrotron_coefficients
-from mahakala.transfer import solve_specific_intensity
-
-# print('jax is using the', xla_bridge.get_backend().platform)
-
-__all__ = [
-    "bisection_shadow_par",
-    "geodesic_integrator",
-    "initialize_geodesics_at_camera",
-    "solve_specific_intensity",
-    "synchrotron_coefficients"
-]
+# other quantities
+Msun = 1.989e33

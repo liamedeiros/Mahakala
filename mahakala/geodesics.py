@@ -26,7 +26,6 @@ from jax import jit, jacfwd, vmap, lax
 from jax.numpy.linalg import inv
 
 from jax.lib import xla_bridge
-print('jax is using the', xla_bridge.get_backend().platform)
 
 
 def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul,
