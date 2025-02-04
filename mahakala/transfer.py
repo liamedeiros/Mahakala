@@ -33,7 +33,7 @@ HPL = 6.6261e-27
 GNEWT = 6.6743e-8
 
 
-def solve_specific_intensity_jax(emissivity, absorptivity, dt, L_unit):
+def solve_specific_intensity(emissivity, absorptivity, dt, L_unit):
     """
     Solve the radiative transfer equation for the specific intensity given
     - emissivity: the invariant emissivity at each step
@@ -48,7 +48,7 @@ def solve_specific_intensity_jax(emissivity, absorptivity, dt, L_unit):
     nsteps, npx = emissivity.shape
 
     def solve_one_step(I_nu, i):
-        dI = (-(dt[i-1, :]) * L_unit * (emissivity[i, :] - (absorptivity[i] * I_nu)))
+        dI = - dt[i-1, :]*L_unit * (emissivity[i, :] - (absorptivity[i]*I_nu))
         I_nu += dI
         return I_nu, dI
 
@@ -58,43 +58,8 @@ def solve_specific_intensity_jax(emissivity, absorptivity, dt, L_unit):
     return I_nu, dIs
 
 
-def solve_specific_intensity_newest(emissivity, absorptivity, dt, nu, observing_frequency, L_unit):
-    nsteps, npx = emissivity.shape
-    I_new = np.zeros(npx)
-    I_list = []
-    KuUu = nu / observing_frequency
-    for i in range(nsteps-1, 0, -1):
-        val = (-(dt[i-1, :]) * L_unit * (emissivity[i, :]/abs(KuUu[i])**2 - (abs(KuUu)[i] * absorptivity[i] * I_new)))
-        I_new = I_new + val
-        I_list.append(val)
-    return I_new, np.array(I_list)
-
-
-def solve_specific_intensity_mine(invariant_emissivity, invariant_absorptivity, dt):
-    ## this is the one that we think is working for now. seems to agree (in terms of code) with others
-    ## ... but running tests with ipole now.
-    N = invariant_emissivity.shape[0]
-    I_invariant = np.zeros(invariant_emissivity.shape[1])
-    I_invariant_list = []
-    for i in range(N-1, 0, -1):
-        I_invariant = I_invariant + (- dt[i-1] * (invariant_emissivity[i] - invariant_absorptivity[i] * I_invariant))
-        I_invariant_list.append(I_invariant)
-    return np.array(I_invariant_list)
-
-
-def solve_specific_intensity(invariant_emissivity, invariant_absorptivity, dt, observing_frequency):
-    ## this is the one that we think is working for now. seems to agree (in terms of code) with others
-    ## ... but running tests with ipole now.
-    N = invariant_emissivity.shape[0]
-    I_new = np.zeros(invariant_emissivity.shape[1])
-    final_I = []
-    for i in range(N-1, 0, -1):
-        I_new = I_new + (- dt[i-1] * (invariant_emissivity[i,:] - (invariant_absorptivity[i,:] * I_new)))
-        final_I.append(I_new)
-    return np.array(final_I) * observing_frequency**3.
-
-
-def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu, invariant=True, rescale_nu=1.):
+def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu,
+                             invariant=True, rescale_nu=1.):
     """
     Compute thermal synchrotron emissivity and absorptivity given
     - Ne: electron density
