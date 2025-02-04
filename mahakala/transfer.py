@@ -22,9 +22,7 @@ THE SOFTWARE.
 
 import numpy as np
 from jax import numpy as jnp
-from scipy import special
-
-from jax import jit, lax
+from jax import lax
 
 
 EE = 4.8032e-10
@@ -35,62 +33,37 @@ HPL = 6.6261e-27
 GNEWT = 6.6743e-8
 
 
-def specific_intensity_aaa(N,synemiss_data,absorption_data,nu,KuUu,dt):
-    I_new = np.zeros(len(synemiss_data[0]))
-    I_list = np.zeros((N,2048))
-    for i in range(N-1,0,-1):
-        val =  (-(dt[i-1,:]) * (G*M_BH/c**2) * (synemiss_data[i,:]/abs(KuUu[i,:])**2 -  (abs(KuUu)[i,:] * absorption_data[i,:] * I_new)))
-        I_new = I_new + val
-
-        I_list[N-i,:] = val
-    return I_new, I_list
-
-def specific_intensity_bbb(N,synemiss_data,absorption_data,nu,KuUu,dt):
-    '''
-    !@brief This function calculates the specific intensity of the plasma
-    @param N The number of photons
-    @param synemiss_data The synchrotron emissivity of the plasma
-    @param absorption_data The absorption coefficient of the plasma
-    @param nu The frequency of the photon
-    @param KuUu The 4-velocity of the photon
-    @param dt The time step
-    @returns The specific intensity of the plasma
-    '''
-    I_new = np.zeros(len(synemiss_data[0]))
-    I_list = np.zeros((N,2048))
-    for i in range(N-1,0,-1):
-        val =  (-(dt[i-1,:]) * (G*M_BH/c**2) * (synemiss_data[i,:]/abs(KuUu[i,:])**2 -  (abs(KuUu)[i,:] * absorption_data[i,:] * I_new)))
-        I_new = I_new + val
-
-        I_list[N-i,:] = val
-    return I_new, I_list
-
-"""
-KuUu = local_nu / observing_frequency
-
-EE = 4.8032e-10
-KB = 1.3807e-16
-CL = 2.99792458e10
-ME = 9.1094e-28
-HPL = 6.6261e-27
-GNEWT = 6.6743e-8
-
-N = len(emissivity)
-I_new = np.zeros(len(emissivity[0]))
-I_list = np.zeros((N, len(emissivity[0])))
-for i in range(N-1,0,-1):
-    val =  (-(final_dt[i-1,:]) * (GNEWT*M_bh/CL**2) * (emissivity[i,:]/abs(KuUu[i,:])**2 -  (abs(KuUu)[i,:] * absorptivity[i,:] * I_new)))
-    I_new = I_new + val
-
-    I_list[N-i,:] = val
+def solve_specific_intensity_jax(emissivity, absorptivity, dt, L_unit):
     """
+    Solve the radiative transfer equation for the specific intensity given
+    - emissivity: the invariant emissivity at each step
+    - absorptivity: the invariant absorptivity at each step
+    - dt: the time step at each step
+    - L_unit: the length unit, which is multiplied into the step size
+
+    Returns:
+    - I_new: the final "image" specific intensity
+    - I_list: the specific intensity computed for each step
+    """
+    nsteps, npx = emissivity.shape
+
+    def solve_one_step(I_nu, i):
+        dI = (-(dt[i-1, :]) * L_unit * (emissivity[i, :] - (absorptivity[i] * I_nu)))
+        I_nu += dI
+        return I_nu, dI
+
+    I_nu = jnp.zeros(npx)
+    I_nu, dIs = lax.scan(solve_one_step, I_nu, jnp.arange(nsteps - 1, 0, -1))
+
+    return I_nu, dIs
+
 
 def solve_specific_intensity_newest(emissivity, absorptivity, dt, nu, observing_frequency, L_unit):
-    N = len(emissivity)
-    I_new = np.zeros(len(emissivity[0]))
+    nsteps, npx = emissivity.shape
+    I_new = np.zeros(npx)
     I_list = []
     KuUu = nu / observing_frequency
-    for i in range(N-1, 0, -1):
+    for i in range(nsteps-1, 0, -1):
         val = (-(dt[i-1, :]) * L_unit * (emissivity[i, :]/abs(KuUu[i])**2 - (abs(KuUu)[i] * absorptivity[i] * I_new)))
         I_new = I_new + val
         I_list.append(val)
@@ -119,39 +92,6 @@ def solve_specific_intensity(invariant_emissivity, invariant_absorptivity, dt, o
         I_new = I_new + (- dt[i-1] * (invariant_emissivity[i,:] - (invariant_absorptivity[i,:] * I_new)))
         final_I.append(I_new)
     return np.array(final_I) * observing_frequency**3.
-
-def solve_specific_intensity_old(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
-    I_new = np.zeros(synemiss_data.shape[1])
-    range_values = jnp.array(range(N-1, 0, -1))
-    for i in range_values:
-        val = (-(dt[i-1, :]) * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * I_new)))
-        I_new = I_new + val
-    return np.array(I_new)
-
-
-def solve_specific_intensity_new2(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
-    range_values = np.arange(N-1, 0, -1)
-    val = -(dt[range_values-1, :] * (GNEWT*M_BH/CL**2) * (synemiss_data[range_values, :]/np.abs(KuUu[range_values, :])**2 - (np.abs(KuUu)[range_values, :] * absorption_data[range_values, :] * np.cumsum(val, axis=0))))
-    I_new = np.sum(val, axis=0)
-    return np.array(I_new)
-
-def solve_specific_intensity_new(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
-    I_new = np.zeros(synemiss_data.shape[1])
-    for i in range(N-1, 0, -1):
-        val = -(dt[i-1, :] * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * I_new)))
-        I_new += val
-    return np.array(I_new)
-
-@jit
-def solve_specific_intensity_jax(N, synemiss_data, absorption_data, KuUu, dt, M_BH):
-    
-    def body_func(carry, i):
-        val = (-(dt[i-1, :]) * (GNEWT*M_BH/CL**2) * (synemiss_data[i, :]/abs(KuUu[i, :])**2 - (abs(KuUu)[i, :] * absorption_data[i, :] * carry)))
-        return carry + val, None
-
-    I_new, _ = lax.scan(body_func, jnp.zeros(synemiss_data.shape[1]), jnp.arange(N-1, 0, -1))
-
-    return I_new
 
 
 def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu, invariant=True, rescale_nu=1.):
@@ -201,11 +141,9 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu, invariant=True, re
     absorptivity = emissivity / B_nu
 
     if invariant:
-        #kdotu = nu * rescale_nu
-        #emissivity = emissivity  # / nu**2.  # em / nu^2
-        #absorptivity = nu**3. * absorptivity  # nu * abs
-        emissivity = emissivity / nu**2.
-        absorptivity = absorptivity * nu
+        rescaled_nu = nu * rescale_nu
+        emissivity = emissivity / rescaled_nu**2.
+        absorptivity = absorptivity * rescaled_nu
 
     emissivity = emissivity.at[jnp.isnan(emissivity)].set(0)
     absorptivity = absorptivity.at[jnp.isnan(absorptivity)].set(0)
