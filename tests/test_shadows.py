@@ -19,21 +19,27 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-from mahakala.geodesics import find_shadow_bisection
-from mahakala.geodesics import find_shadow_bisection_angles
-from mahakala.geodesics import geodesic_integrator
-from mahakala.geodesics import initialize_geodesics_at_camera
 
-from mahakala.transfer import solve_specific_intensity
-from mahakala.transfer import synchrotron_coefficients
+import numpy as np
+import mahakala as ma
 
-# print('jax is using the', xla_bridge.get_backend().platform)
 
-__all__ = [
-    "find_shadow_bisection",
-    "find_shadow_bisection_angles",
-    "geodesic_integrator",
-    "initialize_geodesics_at_camera",
-    "solve_specific_intensity",
-    "synchrotron_coefficients"
-]
+def test_kerr_cks():
+
+    saved_shadows = np.load("data/shadow_data.npy", allow_pickle=True).item()
+
+    for key in saved_shadows.keys():
+
+        bhspin = saved_shadows[key]['bhspin']
+        inc = saved_shadows[key]['inclination']
+        trial_angles = saved_shadows[key]['angles']
+        target_radii = saved_shadows[key]['radii']
+
+        radii = ma.find_shadow_bisection_angles(bhspin, inc, trial_angles)
+
+        assert np.allclose(radii, target_radii, rtol=1e-2)
+
+
+if __name__ == "__main__":
+
+    test_kerr_cks()

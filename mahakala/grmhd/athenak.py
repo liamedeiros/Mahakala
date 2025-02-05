@@ -34,8 +34,6 @@ import time
 from mahakala.geodesics import metric, imetric
 from mahakala.grmhd.grmhd import GRMHDFluidModel
 
-#from mahakala.units import CL, ME
-
 
 @jit
 def vec_metric(X, bhspin):
