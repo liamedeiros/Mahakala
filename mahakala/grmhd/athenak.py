@@ -47,9 +47,10 @@ def vec_imetric(X, bhspin):
 
 class AthenakFluidModel(GRMHDFluidModel):
 
-    def __init__(self, grmhd_filename, bhspin):
+    def __init__(self, grmhd_filename, bhspin, fluid_gamma=None):
         self.load_athenak_meshblocks(grmhd_filename)
         self.bhspin = bhspin
+        self.fluid_gamma = fluid_gamma
 
     def get_index_for_primitive_by_name(self, prim):
         """

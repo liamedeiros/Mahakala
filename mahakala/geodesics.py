@@ -141,8 +141,8 @@ def get_initial_grid(inclination, distance, fov_lower, fov_upper, spacing,
     - spacing: linear resolution of the grid
     - camera_type: 'grid' or 'equator'
 
-    If camera_type is 'grid', then the function returns a grid of photons in 
-    the image plane. When the camera_type is 'equator', the function returns 
+    If camera_type is 'grid', then the function returns a grid of photons in
+    the image plane. When the camera_type is 'equator', the function returns
     a line of photons in the equatorial plane.
 
     Returns:
@@ -330,8 +330,8 @@ def rhs(state1, bhspin):
 @jit
 def imetric(x, bhspin):
     """
-    Return the inverse of the metric at a given position x (i.e., the 
-    contravariant metric) using linalg.inv.
+    Return the inverse of the metric (i.e., the contravariant metric)
+    using linalg.inv, given
     - x: 4-vector position in cartesian KS coordinates
     - bhspin: black hole spin parameter
     """

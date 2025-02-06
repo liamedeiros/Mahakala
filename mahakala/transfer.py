@@ -69,7 +69,7 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu,
     - B: magnetic field
     - nu: local frequency
     - pitch_angle: pitch angle
-    - invariant: whether to return invariant coefficients (default = True)
+    - invariant: whether to return invariant forms (default = True)
     - rescale_nu: rescale frequency by this factor (default = 1.)
 
     The rescale_nu factor is useful for dealing with numerical precision
