@@ -19,6 +19,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+
 KB = 1.3807e-16
 CL = 2.99792458e10
 ME = 9.1094e-28
@@ -27,7 +28,9 @@ EC = 4.8032e-10
 HPL = 6.6261e-27
 GNEWT = 6.6743e-8
 
-def rlow_rhigh_model(dens, u, beta, r_low=1, r_high=40, electron_gamma=4./3, ion_gamma=5./3):
+
+def rlow_rhigh_model(dens, u, beta, r_low=1, r_high=40,
+                     electron_gamma=4./3, ion_gamma=5./3):
     """
     Compute dimensionless electron temperature given the following parameters:
     - dens: density
@@ -41,6 +44,7 @@ def rlow_rhigh_model(dens, u, beta, r_low=1, r_high=40, electron_gamma=4./3, ion
     """
 
     T_ratio = (r_high * beta**2 + r_low) / (1 + beta**2)
-    t_electron = CL**2 * (MP * u * (electron_gamma - 1.) * (ion_gamma - 1.))/(dens * ((ion_gamma - 1.) + (electron_gamma - 1.) * T_ratio))
+    t_electron = CL**2 * (MP * u * (electron_gamma - 1.) * (ion_gamma - 1.))
+    t_electron /= dens * ((ion_gamma - 1.) + (electron_gamma - 1.) * T_ratio)
 
     return t_electron / (ME*CL*CL)

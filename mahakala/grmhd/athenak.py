@@ -64,27 +64,6 @@ class AthenakFluidModel(GRMHDFluidModel):
             return var_names.index(prim)
         return -1
 
-    def get_extended(self, arr):
-        """
-        Extend a one-dimensional array by one element on each side and fill
-        the new elements with linear extrapolation.
-        """
-        arr2 = np.zeros(arr.size + 2)
-        arr2[1:-1] = arr
-        dx = arr[1] - arr[0]
-        arr2[0] = arr2[1] - dx
-        arr2[-1] = arr2[-2] + dx
-        return arr2
-
-    def get_all_vals_unique(self, xs):
-        """
-        Get all unique values in a list of arrays.
-        """
-        all_xs = []
-        for x in xs:
-            all_xs += list(x)
-        return np.array(sorted(list(set(all_xs))))
-
     def load_athenak_meshblocks(self, grmhd_filename):
         """
         Load meshblocks from an athenak athdf file. The meshblocks are stored
@@ -119,18 +98,11 @@ class AthenakFluidModel(GRMHDFluidModel):
             B = np.array(hfp['B'])
             LogicalLocations = np.array(hfp['LogicalLocations'])
             Levels = np.array(hfp['Levels'])
-            self.variable_names = np.array([n.decode('utf-8') for n in hfp.attrs['VariableNames']])
+            vars = [n.decode('utf-8') for n in hfp.attrs['VariableNames']]
+            self.variable_names = np.array(vars)
             hfp.close()
 
-            min_level = int(Levels.min())
-            max_level = int(Levels.max())
-
-            max_l1_i = LogicalLocations[Levels == min_level][:, 0].max()
-            max_l1_j = LogicalLocations[Levels == min_level][:, 1].max()
-            max_l1_k = LogicalLocations[Levels == min_level][:, 2].max()
-
             nprim, nmb, nmbk, nmbj, nmbi = uov.shape
-
             nprim_all = 8
 
             mb_index_map = {}
@@ -140,21 +112,8 @@ class AthenakFluidModel(GRMHDFluidModel):
                 key = tlevel, ti, tj, tk
                 mb_index_map[key] = mb
 
-
-            all_x1s = self.get_all_vals_unique(x1v)
-            all_x2s = self.get_all_vals_unique(x2v)
-            all_x3s = self.get_all_vals_unique(x3v)
-
-            extrema = np.abs(np.array([all_x1s.min(), all_x1s.max(), all_x2s.min(),
-                                    all_x2s.max(), all_x3s.min(), all_x3s.max()]))
-
             all_meshblocks = []
             for mbi in tqdm(mb_index_map.values()):
-
-                # get edges for grid interpolator
-                x1e = self.get_extended(x1v[mbi])
-                x2e = self.get_extended(x2v[mbi])
-                x3e = self.get_extended(x3v[mbi])
 
                 # get meshblock key information
                 tlevel = Levels[mbi]
@@ -176,8 +135,8 @@ class AthenakFluidModel(GRMHDFluidModel):
                                 continue
 
                             mb_info = [tlevel, ti, tj, tk, di, dj, dk, nprim, nmbi, nmbj, nmbk]
-                            new_meshblock = self.get_new_meshblock_boundary(*mb_info, mb_index_map,
-                                                                            new_meshblock, uov, B)
+                            new_meshblock = self._get_new_meshblock_boundary(*mb_info, mb_index_map,
+                                                                             new_meshblock, uov, B)
 
                 all_meshblocks.append(new_meshblock)
 
@@ -198,8 +157,7 @@ class AthenakFluidModel(GRMHDFluidModel):
 
             self.nprim_all = nprim_all
 
-
-    def get_key_for_level(self, c_level, n_level, ti, tj, tk, di, dj, dk):
+    def _get_key_for_level(self, c_level, n_level, ti, tj, tk, di, dj, dk):
         '''
         WARNING: This fails if abs(c_level-n_level) > 1.
         '''
@@ -231,13 +189,13 @@ class AthenakFluidModel(GRMHDFluidModel):
 
         raise Exception("Unable to compute key for meshblock level")
 
-    def get_slice_source(self, ntot, oddity):
+    def _get_slice_source(self, ntot, oddity):
         if oddity == 1:
             return slice(ntot//2, ntot)
         else:
             return slice(0, ntot//2)
 
-    def get_01_source(self, v, ntot, oddity):
+    def _get_01_source(self, v, ntot, oddity):
         if oddity == 1:
             if v == 0:
                 return ntot//2
@@ -247,9 +205,9 @@ class AthenakFluidModel(GRMHDFluidModel):
                 return 0
             return ntot // 2 - 1
 
-    def get_new_meshblock_boundary(self, tlevel, ti, tj, tk, di, dj, dk,
-                                   nprim, nmbi, nmbj, nmbk, mb_index_map,
-                                   new_meshblock, uov, B):
+    def _get_new_meshblock_boundary(self, tlevel, ti, tj, tk, di, dj, dk,
+                                    nprim, nmbi, nmbj, nmbk, mb_index_map,
+                                    new_meshblock, uov, B):
 
         # first see if we can stay on the same level
         trial_key = tlevel, ti+di, tj+dj, tk+dk
@@ -271,7 +229,7 @@ class AthenakFluidModel(GRMHDFluidModel):
             return new_meshblock
 
         # then see if we can go up one level
-        trial_key = self.get_key_for_level(tlevel, tlevel-1, ti, tj, tk, di, dj, dk)
+        trial_key = self._get_key_for_level(tlevel, tlevel-1, ti, tj, tk, di, dj, dk)
         if trial_key in mb_index_map:
 
             nmb = mb_index_map[trial_key]
@@ -282,16 +240,51 @@ class AthenakFluidModel(GRMHDFluidModel):
             oddj = (tj+dj) % 2
             oddk = (tk+dk) % 2
 
-            source_i = self.get_01_source(0, nmbi, oddi) if di == 1 else (self.get_01_source(-1, nmbi, oddi) if di == -1 else self.get_slice_source(nmbi, oddi))
-            source_j = self.get_01_source(0, nmbj, oddj) if dj == 1 else (self.get_01_source(-1, nmbj, oddj) if dj == -1 else self.get_slice_source(nmbj, oddj))
-            source_k = self.get_01_source(0, nmbk, oddk) if dk == 1 else (self.get_01_source(-1, nmbk, oddk) if dk == -1 else self.get_slice_source(nmbk, oddk))
+            if di == 1:
+                source_i = self._get_01_source(0, nmbi, oddi)
+            elif di == -1:
+                source_i = self._get_01_source(-1, nmbi, oddi)
+            else:
+                source_i = self._get_slice_source(nmbi, oddi)
+
+            if dj == 1:
+                source_j = self._get_01_source(0, nmbj, oddj)
+            elif dj == -1:
+                source_j = self._get_01_source(-1, nmbj, oddj)
+            else:
+                source_j = self._get_slice_source(nmbj, oddj)
+
+            if dk == 1:
+                source_k = self._get_01_source(0, nmbk, oddk)
+            elif dk == -1:
+                source_k = self._get_01_source(-1, nmbk, oddk)
+            else:
+                source_k = self._get_slice_source(nmbk, oddk)
 
             for slc_i in range(2):
                 for slc_j in range(2):
                     for slc_k in range(2):
-                        target_i = -1 if di == 1 else (0 if di == -1 else slice(1+slc_i, nmbi+slc_i+1, 2))
-                        target_j = -1 if dj == 1 else (0 if dj == -1 else slice(1+slc_j, nmbj+slc_j+1, 2))
-                        target_k = -1 if dk == 1 else (0 if dk == -1 else slice(1+slc_k, nmbk+slc_k+1, 2))
+
+                        if di == 1:
+                            target_i = -1
+                        elif di == -1:
+                            target_i = 0
+                        else:
+                            target_i = slice(1+slc_i, nmbi+slc_i+1, 2)
+
+                        if dj == 1:
+                            target_j = -1
+                        elif dj == -1:
+                            target_j = 0
+                        else:
+                            target_j = slice(1+slc_j, nmbj+slc_j+1, 2)
+
+                        if dk == 1:
+                            target_k = -1
+                        elif dk == -1:
+                            target_k = 0
+                        else:
+                            target_k = slice(1+slc_k, nmbk+slc_k+1, 2)
 
                         new_meshblock[:nprim, target_k, target_j, target_i] = uov[:, nmb, source_k, source_j, source_i]
                         new_meshblock[nprim:, target_k, target_j, target_i] = B[:, nmb, source_k, source_j, source_i]
@@ -308,7 +301,7 @@ class AthenakFluidModel(GRMHDFluidModel):
             num_slices -= 1
 
         # finally see if we can go down one level
-        trial_key = self.get_key_for_level(tlevel, tlevel+1, ti, tj, tk, di, dj, dk)
+        trial_key = self._get_key_for_level(tlevel, tlevel+1, ti, tj, tk, di, dj, dk)
         if trial_key in mb_index_map:
 
             # always need this, since we need to deal with offsets
@@ -495,19 +488,19 @@ class AthenakFluidModel(GRMHDFluidModel):
                                 for v3 in range(2):
 
                                     copy_source_i = source_i
-                                    if type(source_i) == int:
+                                    if isinstance(source_i, int):
                                         copy_source_i += v1
                                     else:
                                         copy_source_i = slice(v1, nmbi+v1, 2)
 
                                     copy_source_j = source_j
-                                    if type(source_j) == int:
+                                    if isinstance(source_j, int):
                                         copy_source_j += v2
                                     else:
                                         copy_source_j = slice(v2, nmbj+v2, 2)
 
                                     copy_source_k = source_k
-                                    if type(source_k) == int:
+                                    if isinstance(source_k, int):
                                         copy_source_k += v3
                                     else:
                                         copy_source_k = slice(v3, nmbk+v3, 2)
@@ -533,8 +526,8 @@ class AthenakFluidModel(GRMHDFluidModel):
 
     def get_prims_from_geodesics(self, S, profile=False):
         """
-        Return the primitive variable data at the points given by S[:, :, :4] in
-        a dictionary with keys ['dens', 'u', 'U1', 'U2', 'U3', 'B1', 'B2', 'B3']
+        Return the primitive variables at the points given by S[:, :, :4] in a
+        dictionary with keys ['dens', 'u', 'U1', 'U2', 'U3', 'B1', 'B2', 'B3']
         and filling in zero where the geodesics lie outside of the domain.
 
         TODO: zero within some radius?
@@ -546,9 +539,9 @@ class AthenakFluidModel(GRMHDFluidModel):
         # get which meshblock each geodesic point is in
         mb_indices = np.ones((nsteps, npx), dtype=int) * -1
 
-        ext_x1 = np.array([[self.x1f[mbi][0], self.x1f[mbi][-1]] for mbi in range(nmb)])
-        ext_x2 = np.array([[self.x2f[mbi][0], self.x2f[mbi][-1]] for mbi in range(nmb)])
-        ext_x3 = np.array([[self.x3f[mbi][0], self.x3f[mbi][-1]] for mbi in range(nmb)])
+        ext_x1 = np.array([[self.x1f[i][0], self.x1f[i][-1]] for i in range(nmb)])
+        ext_x2 = np.array([[self.x2f[i][0], self.x2f[i][-1]] for i in range(nmb)])
+        ext_x3 = np.array([[self.x3f[i][0], self.x3f[i][-1]] for i in range(nmb)])
 
         t0 = time.time()
 
@@ -563,12 +556,12 @@ class AthenakFluidModel(GRMHDFluidModel):
         t1 = time.time()
 
         # get the primitive data
-        x1_left = jnp.array([self.x1v[mbi][0] for mbi in range(nmb)])
-        x2_left = jnp.array([self.x2v[mbi][0] for mbi in range(nmb)])
-        x3_left = jnp.array([self.x3v[mbi][0] for mbi in range(nmb)])
-        dx1 = jnp.array([self.x1v[mbi][1] - self.x1v[mbi][0] for mbi in range(nmb)])
-        dx2 = jnp.array([self.x2v[mbi][1] - self.x2v[mbi][0] for mbi in range(nmb)])
-        dx3 = jnp.array([self.x3v[mbi][1] - self.x3v[mbi][0] for mbi in range(nmb)])
+        x1_left = jnp.array([self.x1v[i][0] for i in range(nmb)])
+        x2_left = jnp.array([self.x2v[i][0] for i in range(nmb)])
+        x3_left = jnp.array([self.x3v[i][0] for i in range(nmb)])
+        dx1 = jnp.array([self.x1v[i][1] - self.x1v[i][0] for i in range(nmb)])
+        dx2 = jnp.array([self.x2v[i][1] - self.x2v[i][0] for i in range(nmb)])
+        dx3 = jnp.array([self.x3v[i][1] - self.x3v[i][0] for i in range(nmb)])
 
         meshblock_data = jnp.array(self.all_meshblocks)
 
@@ -645,7 +638,13 @@ class AthenakFluidModel(GRMHDFluidModel):
 
     def get_fluid_scalars_from_geodesics(self, S, fallback_pitch_angle=np.pi/3., profile=False):
         """
-        TODO: documentation
+        Compute fluid scalars dens, u, pitch_angle, kdotu, and b at points
+        given by S[:, :, :4] in a dictionary with keys corresponding equal
+        to the scalar names. Fill with zero when the geodesics are outside
+        the domain.
+        - S: array of shape (nsteps, npx, 8) with positions and momenta
+        - fallback_pitch_angle: fallback pitch angle (default = pi/3)
+        - profile: print profiling information (default = False)
 
         TODO: zero within some radius?
         """

@@ -48,6 +48,9 @@ def make_image(fluid_model, camera_inclination=60, camera_distance=1000,
     - resolution: number of pixels in each dimension (default = 160)
     - max_nsteps: maximum number of steps for a geodesic (default = 10000)
     - max_chunk_bytes: maximum bytes for one "image segment" evaluation
+
+    Returns:
+    - a 2D numpy array of the image specific intensities in cgs
     """
 
     bhspin = fluid_model.bhspin

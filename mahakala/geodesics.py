@@ -26,56 +26,36 @@ from jax import jit, jacfwd, vmap, lax
 from jax.numpy.linalg import inv
 
 
-def initialize_geodesics_at_camera(bhspin, inclination, distance, ll, ul,
-                                   pixels_per_side, camera_type='grid'):
-    '''
-    @ Brief Returns list of photon positions and wavevectors across image.
+def initialize_geodesics_at_camera(bhspin, inclination, distance, fov_lower,
+                                   fov_upper, pixels_per_side,
+                                   camera_type='grid'):
+    """
+    Compute initial positions and wavevectors for photons in the image plane
+    based on input parameters.
+    - bhspin: normalized black hole spin parameter
+    - inclination: inclination of observer in degrees
+    - distance: distance of observer from BH in GM/c^2
+    - fov_lower: lower limit of the image plane
+    - fov_upper: upper limit of the image plane
+    - pixels_per_side: linear resolution of the returned image array
+    - camera_type: default=grid or equator (e.g., for studying cross sections)
 
-    bhspin - normalized black hole spin parameter
-    inclination - in degrees
-    distance - between the image and the coordinate origin (in GM/c^2)
-    ll - lower limit of the image plane
-    ul - upper limit of the image plane
-    pixels_per_side - linear resolution of the returned image array
-    camera_type - default=grid or equator (e.g., for studying cross sections)
-    '''
+    If camera_type is 'grid', then the function returns a grid of photons in
+    the image plane. When the camera_type is 'equator', the function returns
+    a line of photons in the equatorial plane.
 
-    s0_x, s0_v = get_initial_grid(inclination, distance, ll, ul,
+    Returns:
+    - s0_x: array containing the position 4-vectors of all the photons
+    - s0_v: array containing the 4-wavevectors of all the photons
+    """
+
+    s0_x, s0_v = get_initial_grid(inclination, distance, fov_lower, fov_upper,
                                   pixels_per_side, camera_type)
 
     return initial_condition(s0_x, s0_v, bhspin)
 
 
-def Nullify(metric, bhspin, p=1):
-    '''
-    !@brief This functions takes the metric as a parameter, and then nullifies
-    the velocity vector to make it a null geodesic.
-    '''
-    assert p > 0
-
-    @jit
-    def nullify(x, v):
-
-        g = metric(x, bhspin)
-        A = v[:p] @ g[:p, :p] @ v[:p]
-        b = v[p:] @ g[p:, :p] @ v[:p]
-        C = v[p:] @ g[p:, p:] @ v[p:]
-
-        d1, d2 = quadratic(A, b, C)
-        S = jnp.select([d1 > 0, d2 > 0], [d1, d2], jnp.nan)
-
-        return jnp.concatenate([v[:p], v[p:] / S])
-
-    return nullify
-
-
-def quadratic(A, b, C):
-    '''
-    !@brief Used by Nullify
-
-    This is an intermediate function that makes sure that
-    our velocity vector follows a  null geodesics
-    '''
+def _quadratic(A, b, C):
     bb = b * b
     AC = A * C
     dd = jnp.select([~jnp.isclose(bb, AC)], [bb - AC], 0)
@@ -86,14 +66,32 @@ def quadratic(A, b, C):
     return jnp.minimum(x1, x2), jnp.maximum(x1, x2)
 
 
+def _Nullify(metric, bhspin, p=1):
+    assert p > 0
+
+    @jit
+    def nullify(x, v):
+
+        g = metric(x, bhspin)
+        A = v[:p] @ g[:p, :p] @ v[:p]
+        b = v[p:] @ g[p:, :p] @ v[:p]
+        C = v[p:] @ g[p:, p:] @ v[p:]
+
+        d1, d2 = _quadratic(A, b, C)
+        S = jnp.select([d1 > 0, d2 > 0], [d1, d2], jnp.nan)
+
+        return jnp.concatenate([v[:p], v[p:] / S])
+
+    return nullify
+
+
 @jit
 def metric(x, bhspin):
-    '''
-    Calculates the Cartesian Kerr metric in Cartesian Kerr-Schild coordinates.
-    @param x 1-D jax array with 4 elements corresponding to {t,x,y,z}
-    @returns a 4 X 4 two dimensional array reprenting the metric
-
-    '''
+    """
+    Calculate the Cartesian Kerr metric in Cartesian Kerr-Schild coordinates.
+    - x: four-vector of position in Cartesian KS coordinates {t,x,y,z}
+    - bhspin: black hole spin parameter
+    """
     eta = jnp.diag(jnp.array([-1, 1, 1, 1]))
     a = bhspin
     aa = a * a
@@ -107,17 +105,24 @@ def metric(x, bhspin):
 
 
 def get_camera_pixel(inclination, distance, radius, angle):
+    """
+    Compute initial position and wavevector for photon in image plane.
+    - inclination: inclination of observer in degrees
+    - distance: distance of observer from BH in GM/c^2
+    - radius: array of photon radii in GM/c^2 (on the image plane)
+    - angle: array of azimuthal angles in radians (on the image plane)
+    """
 
     size = np.size(radius)
-    x = jnp.ones(size) * np.cos(angle) * radius  # angle MUST be in radians
+    x = jnp.ones(size) * np.cos(angle) * radius  # angle should be in radians
     y = jnp.ones(size) * np.sin(angle) * radius
     z = jnp.ones(size) * 0.
 
-    origin_BH = Image_to_BH(0, 0, 0, inclination, distance)
+    origin_BH = _Image_to_BH(0, 0, 0, inclination, distance)
     temp_coord = _perpendicular([x, y])
 
-    init_BH = Image_to_BH(x, y, z, inclination, distance)
-    perp_BH = Image_to_BH(temp_coord[0], temp_coord[1], jnp.zeros(1), inclination, distance)
+    init_BH = _Image_to_BH(x, y, z, inclination, distance)
+    perp_BH = _Image_to_BH(temp_coord[0], temp_coord[1], jnp.zeros(1), inclination, distance)
 
     vec1 = - init_BH.T + origin_BH
     vec2 = perp_BH - init_BH
@@ -160,11 +165,11 @@ def get_initial_grid(inclination, distance, fov_lower, fov_upper, spacing,
         x = x.flatten()
         y = y.flatten()
 
-        origin_BH = Image_to_BH(0, 0, 0, inclination, distance)
+        origin_BH = _Image_to_BH(0, 0, 0, inclination, distance)
         temp_coord = _perpendicular([x, y])
 
-        init_BH = Image_to_BH(x, y, z, inclination, distance)
-        perp_BH = Image_to_BH(temp_coord[0], temp_coord[1], 0 * jnp.ones(len(grid_list)**2), inclination, distance)
+        init_BH = _Image_to_BH(x, y, z, inclination, distance)
+        perp_BH = _Image_to_BH(temp_coord[0], temp_coord[1], 0 * jnp.ones(len(grid_list)**2), inclination, distance)
 
         vec1 = - init_BH.T + origin_BH
         vec2 = perp_BH - init_BH
@@ -192,10 +197,11 @@ def get_initial_grid(inclination, distance, fov_lower, fov_upper, spacing,
         return s0_x, s0_v
 
     else:
-        print(f'Unexpected camera type \"{camera_type}\". Please choose either "grid" or "equator"')
+        print(f'Unexpected camera type \"{camera_type}\".')
+        print('Please choose either "grid" or "equator"')
 
 
-def Image_to_BH(x, y, z, i, d):
+def _Image_to_BH(x, y, z, i, d):
     i = i * np.pi/180
     x_BH = -y * np.cos(i) + z * np.sin(i) + d * np.sin(i)
     y_BH = x
@@ -216,7 +222,7 @@ def initial_condition(s0_x, s0_v, bhspin):
     - s0_x: photon position in cartesian KS coordinates
     - s0_v: photon wavevectors in cartesian KS coordinates (need not be null)
     """
-    make_null = Nullify(metric, bhspin)
+    make_null = _Nullify(metric, bhspin)
 
     def concatenate_func(x_col, v_col):
         return jnp.concatenate([x_col, make_null(x_col, v_col)])
@@ -225,36 +231,37 @@ def initial_condition(s0_x, s0_v, bhspin):
 
 
 def geodesic_integrator(N, s0, div, tol, bhspin):
-    '''
-    JAX implementation of the geodesic integrator.
-
-    ## TODO: make better documentation
-
+    """
+    Geodesic integrator using RK4 method and adapative step size as
+    described in arxiv:2304.03804.
+    - N: maximum number of geodesic integration steps
+    - s0: initial state of the geodesic
     - div: division factor for the timestep
     - tol: tolerance for the timestep
+    - bhspin: black hole spin parameter
 
-    TODO: change first argument (max_steps) to be optional kwarg
-    '''
+    TODO: consider making various arguments optional kwarg
+    """
 
     def geodesic_step(s0, _):
 
         # get new timestep
         dt = -(radius_cal(s0[:, :4], bhspin) - radius_EH(bhspin)) / div
-        condition = jnp.logical_or(jnp.abs(dt) * div > 1500, jnp.abs(dt) * div < tol)
-        condition = jnp.logical_or(condition, jnp.isnan(dt))
+        condition = jnp.logical_or(jnp.isnan(dt), jnp.abs(dt)*div < tol)
+        condition = jnp.logical_or(condition, jnp.abs(dt)*div > 1500)
         dt = lax.select(condition, jnp.zeros_like(dt), dt)
 
         # get new state
         new_state = RK4_gen(s0, dt, bhspin)
 
         # get new timestep
-        dt_new = -(radius_cal(new_state[:, :4], bhspin) - radius_EH(bhspin)) / div
-        condition = jnp.logical_or(jnp.isnan(dt_new), jnp.abs(dt_new) * div < tol)
-        condition = jnp.logical_or(condition, jnp.abs(dt_new) * div > 1500)
-        dt_new = lax.select(condition, jnp.zeros_like(dt_new), dt_new)
+        dtnew = -(radius_cal(new_state[:, :4], bhspin)-radius_EH(bhspin))/div
+        condition = jnp.logical_or(jnp.isnan(dtnew), jnp.abs(dtnew)*div < tol)
+        condition = jnp.logical_or(condition, jnp.abs(dtnew)*div > 1500)
+        dtnew = lax.select(condition, jnp.zeros_like(dtnew), dtnew)
 
         # in places where next dt == 0, set new_state = s0 and dt = 0
-        condition = dt_new == 0.
+        condition = dtnew == 0.
         dt = lax.select(condition, jnp.zeros_like(dt), dt)
         condition = jnp.broadcast_to(condition[:, None], s0.shape)
         new_state = lax.select(condition, s0, new_state)
@@ -285,37 +292,12 @@ def radius_cal(x, bhspin):
 
 
 @jit
-def RK4_gen(state1, dt, bhspin):
-
-    val = len(state1)
-    ans1 = vectorized_rhs(state1, bhspin)
-
-    k1 = jnp.multiply(dt.reshape(val, 1), ans1)
-    ans1 = vectorized_rhs(state1 + 0.5 * k1, bhspin)
-    k2 = jnp.multiply(dt.reshape(val, 1), ans1)
-    ans1 = vectorized_rhs(state1 + 0.5 * k2, bhspin)
-    k3 = jnp.multiply(dt.reshape(val, 1), ans1)
-    ans1 = vectorized_rhs(state1 + k3, bhspin)
-    k4 = jnp.multiply(dt.reshape(val, 1), ans1)
-
-    new_state1 = state1 + 1/6 * (k1 + 2*k2 + 2*k3 + k4)
-    return new_state1
-
-
-@jit
-def vectorized_rhs(s0, bhspin):
-    return vmap(rhs, in_axes=(0, None))(s0, bhspin)
-
-
-@jit
 def rhs(state1, bhspin):
-    '''
-    !@brief Calculates the RHS of the Geodesic equation
-    @param state An n * 8 dimensional array where n = number of photons, 8 = 8 = 4 position coordinates + 4 velocity coordinates
-
-    @returns An n * 8 dimensional array where n = number of photons, 8 = 8 = 4 velocity coordinates + 4 acceleration coordinates
-    '''
-
+    """
+    Compute the right-hand side of the geodesic equation.
+    - state1: 8-vector state of the geodesic (position + momentum)
+    - bhspin: black hole spin parameter
+    """
     x = state1[:4]
     v = state1[4:]
 
@@ -324,7 +306,34 @@ def rhs(state1, bhspin):
 
     a = ig @ (- (jg @ v) @ v + 0.5 * v @ (v @ jg))
 
-    return jnp.concatenate([v,a])
+    return jnp.concatenate([v, a])
+
+
+@jit
+def _vectorized_rhs(s0, bhspin):
+    return vmap(rhs, in_axes=(0, None))(s0, bhspin)
+
+
+@jit
+def RK4_gen(state1, dt, bhspin):
+    """
+    Basic RK4 integrator for geodesics.
+    - state1: initial state of the geodesic
+    - dt: full timestep
+    - bhspin: black hole spin parameter
+    """
+    val = len(state1)
+    ans1 = _vectorized_rhs(state1, bhspin)
+
+    k1 = jnp.multiply(dt.reshape(val, 1), ans1)
+    ans1 = _vectorized_rhs(state1 + 0.5 * k1, bhspin)
+    k2 = jnp.multiply(dt.reshape(val, 1), ans1)
+    ans1 = _vectorized_rhs(state1 + 0.5 * k2, bhspin)
+    k3 = jnp.multiply(dt.reshape(val, 1), ans1)
+    ans1 = _vectorized_rhs(state1 + k3, bhspin)
+    k4 = jnp.multiply(dt.reshape(val, 1), ans1)
+
+    return state1 + 1/6 * (k1 + 2*k2 + 2*k3 + k4)
 
 
 @jit
@@ -379,7 +388,7 @@ def find_shadow_bisection(bhspin, inc, num_angles, max_steps=2000,
     - num_angles: number of angles on the image to find the shadow over
     - max_steps: maximum number of integration steps (default = 2000)
     - error_allowed: allowed uncertainty in the shadow radius (default = 0.001)
-    - max_it: maximum number of iterations to find the shadow radius (default = 40)
+    - max_it: maximum number of iterations to find shadow radius (default = 40)
     """
     angles = np.arange(num_angles)/num_angles*2.*np.pi
 
@@ -413,7 +422,9 @@ def find_shadow_bisection_angles(bhspin, inc, angles, max_steps=2000,
 
     counter = 0
     while np.max(error) > error_allowed and counter < max_it:
-        final_mid = select_photons_integrator(inc, angles, (outer-inner)/2+inner, bhspin, max_steps=max_steps)
+        final_mid = select_photons_integrator(inc, angles,
+                                              (outer-inner)/2+inner,
+                                              bhspin, max_steps=max_steps)
         fell = np.where(final_mid < bisection_limit)
         got_away = np.where(final_mid >= bisection_limit)
         inner[fell] = (outer[fell]-inner[fell])/2+inner[fell]
