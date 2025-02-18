@@ -653,21 +653,32 @@ class AthenakFluidModel(GRMHDFluidModel):
         nmb = len(self.mb_index_map.values())
 
         # get which meshblock each geodesic point is in
-        mb_indices = np.ones((nsteps, npx), dtype=int) * -1
-
-        ext_x1 = np.array([[self.x1f[mbi][0], self.x1f[mbi][-1]] for mbi in range(nmb)])
-        ext_x2 = np.array([[self.x2f[mbi][0], self.x2f[mbi][-1]] for mbi in range(nmb)])
-        ext_x3 = np.array([[self.x3f[mbi][0], self.x3f[mbi][-1]] for mbi in range(nmb)])
+        
+        ext_x1 = jnp.array([[self.x1f[mbi][0], self.x1f[mbi][-1]] for mbi in range(nmb)])
+        ext_x2 = jnp.array([[self.x2f[mbi][0], self.x2f[mbi][-1]] for mbi in range(nmb)])
+        ext_x3 = jnp.array([[self.x3f[mbi][0], self.x3f[mbi][-1]] for mbi in range(nmb)])
 
         t0 = time.time()
 
-        for mbi in tqdm(range(nmb)):
-            mb_mask = (ext_x1[mbi][0] < S[..., 1]) & (S[..., 1] <= ext_x1[mbi][1])
-            mb_mask &= (ext_x2[mbi][0] < S[..., 2]) & (S[..., 2] <= ext_x2[mbi][1])
-            mb_mask &= (ext_x3[mbi][0] < S[..., 3]) & (S[..., 3] <= ext_x3[mbi][1])
-            mb_indices[mb_mask] = mbi
+        if True:
+            mb_indices = np.ones((nsteps, npx), dtype=int) * -1
+            for mbi in tqdm(range(nmb)):
+                mb_mask = (ext_x1[mbi][0] < S[..., 1]) & (S[..., 1] <= ext_x1[mbi][1])
+                mb_mask &= (ext_x2[mbi][0] < S[..., 2]) & (S[..., 2] <= ext_x2[mbi][1])
+                mb_mask &= (ext_x3[mbi][0] < S[..., 3]) & (S[..., 3] <= ext_x3[mbi][1])
+                mb_indices[mb_mask] = mbi
+            mb_indices = jnp.array(mb_indices)
 
-        mb_indices = jnp.array(mb_indices)
+        elif False:
+            def index_fn(_, i):
+                step_indices = jnp.ones(npx, dtype=int) * -1
+                for mbi in range(nmb):
+                    mb_mask = (ext_x1[mbi][0] < S[i, :, 1]) & (S[i, :, 1] <= ext_x1[mbi][1])
+                    mb_mask &= (ext_x2[mbi][0] < S[i, :, 2]) & (S[i, :, 2] <= ext_x2[mbi][1])
+                    mb_mask &= (ext_x3[mbi][0] < S[i, :, 3]) & (S[i, :, 3] <= ext_x3[mbi][1])
+                    step_indices = lax.select(mb_mask, jnp.ones(npx, dtype=int) * mbi, step_indices)
+                return None, step_indices
+            _, mb_indices = lax.scan(index_fn, None, jnp.arange(nsteps))
 
         t1 = time.time()
 
