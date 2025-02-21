@@ -1,0 +1,6 @@
+# grmhd files
+*.athdf
+
+# images
+*.pdf
+*.png
