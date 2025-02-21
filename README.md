@@ -3,7 +3,7 @@
 
 Copyright (C) 2024 Aniket Sharma, Lia Medeiros, George N. Wong, CK Chan, et al.
 
-Mahakala is a python + jax based implementation of a radiative ray-tracing algorithm for arbitrary spacetimes.
+Mahakala is a python + jax based implementation of a radiative ray-tracing algorithm for arbitrary spacetimes. See https://arxiv.org/abs/2304.03804 for more detail.
 
 ## Installation
 
