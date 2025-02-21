@@ -27,7 +27,8 @@ from mahakala.geodesics import initialize_geodesics_at_camera
 from mahakala.transfer import solve_specific_intensity
 from mahakala.transfer import synchrotron_coefficients
 
-# print('jax is using the', xla_bridge.get_backend().platform)
+from jax.lib import xla_bridge
+print('jax is using the', xla_bridge.get_backend().platform)
 
 __all__ = [
     "find_shadow_bisection",
