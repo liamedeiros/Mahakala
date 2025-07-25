@@ -27,39 +27,6 @@ from jax import lax
 from mahakala.constants import EE, ME, CL, HPL
 
 
-def solve_specific_intensity(emissivity, absorptivity, dt, L_unit, dIs=False):
-    """
-    Solve the radiative transfer equation for the specific intensity given
-    - emissivity: the invariant emissivity at each step
-    - absorptivity: the invariant absorptivity at each step
-    - dt: the time step at each step
-    - L_unit: the length unit, which is multiplied into the step size
-    - dIs: whether to return the specific intensity change at each step
-
-    Returns:
-    - I_new: the final "image" specific intensity
-    - I_list: the specific intensity computed for each step
-    """
-
-    nsteps, npx = emissivity.shape
-    I_nu = jnp.zeros(npx)
-
-    def solve_one_step(I_nu, i):
-        dI = - dt[i-1, :]*L_unit * (emissivity[i, :] - (absorptivity[i]*I_nu))
-        I_nu += dI
-        return I_nu, None
-
-    def solve_one_step_dIs(I_nu, i):
-        dI = - dt[i-1, :]*L_unit * (emissivity[i, :] - (absorptivity[i]*I_nu))
-        I_nu += dI
-        return I_nu, dI
-
-    if dIs:
-        return lax.scan(solve_one_step, I_nu, jnp.arange(nsteps - 1, 0, -1))
-
-    return lax.scan(solve_one_step_dIs, I_nu, jnp.arange(nsteps - 1, 0, -1))[0]
-
-
 def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu,
                              invariant=True, rescale_nu=1.):
     """
@@ -117,3 +84,61 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu,
     absorptivity = absorptivity.at[jnp.isnan(absorptivity)].set(0)
 
     return emissivity, absorptivity
+
+
+def solve_specific_intensity(emissivity, absorptivity, dt, L_unit, dIs=False):
+    """
+    Solve the radiative transfer equation for the specific intensity given
+    - emissivity: the invariant emissivity at each step
+    - absorptivity: the invariant absorptivity at each step
+    - dt: the time step at each step
+    - L_unit: the length unit, which is multiplied into the step size
+    - dIs: whether to return the specific intensity change at each step
+
+    Returns:
+    - I_new: the final "image" specific intensity
+    - I_list: the specific intensity computed for each step
+    """
+
+    nsteps, npx = emissivity.shape
+    I_nu = jnp.zeros(npx)
+
+    def solve_one_step(I_nu, i):
+        dI = - dt[i-1, :]*L_unit * (emissivity[i, :] - (absorptivity[i]*I_nu))
+        I_nu += dI
+        return I_nu, None
+
+    def solve_one_step_dIs(I_nu, i):
+        dI = - dt[i-1, :]*L_unit * (emissivity[i, :] - (absorptivity[i]*I_nu))
+        I_nu += dI
+        return I_nu, dI
+
+    if dIs:
+        return lax.scan(solve_one_step, I_nu, jnp.arange(nsteps - 1, 0, -1))
+
+    return lax.scan(solve_one_step_dIs, I_nu, jnp.arange(nsteps - 1, 0, -1))[0]
+
+
+def solve_attenuated_emissivity(emissivity, absorptivity, dt, L_unit):
+    """
+    Solve the radiative transfer equation for specific intensity given
+    - emissivity: the invariant emissivity at each step
+    - absorptivity: the invariant absorptivity at each step
+    - dt: the time step at each step
+    - L_unit: the length unit, which is multiplied into the step size
+    but returning the attenuated (i.e., observed) emissivity contribution
+    to the specific intensity at each step.
+
+    Returns:
+    - attenuated_emissivity: the attenuated emissivity at each step
+    """
+
+    nsteps, npx = emissivity.shape
+    tau = jnp.zeros(npx)
+
+    def solve_one_step(tau, i):
+        local_source = - emissivity[i, :] * dt[i-1, :] * L_unit
+        dtau = absorptivity[i] * dt[i-1] * L_unit
+        return tau - dtau, jnp.exp(-tau) * local_source
+
+    return lax.scan(solve_one_step, tau, jnp.arange(1, nsteps))[1]

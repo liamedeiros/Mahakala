@@ -24,8 +24,9 @@ from mahakala.geodesics import find_shadow_bisection_angles
 from mahakala.geodesics import geodesic_integrator
 from mahakala.geodesics import initialize_geodesics_at_camera
 
-from mahakala.transfer import solve_specific_intensity
 from mahakala.transfer import synchrotron_coefficients
+from mahakala.transfer import solve_specific_intensity
+from mahakala.transfer import solve_attenuated_emissivity
 
 from jax.lib import xla_bridge
 print('jax is using the', xla_bridge.get_backend().platform)
@@ -35,6 +36,7 @@ __all__ = [
     "find_shadow_bisection_angles",
     "geodesic_integrator",
     "initialize_geodesics_at_camera",
+    "synchrotron_coefficients",
     "solve_specific_intensity",
-    "synchrotron_coefficients"
+    "solve_attenuated_emissivity"
 ]
