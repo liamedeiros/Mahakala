@@ -50,20 +50,20 @@ def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu,
     - absorptivity: thermal synchrotron in cgs
     """
 
-    nu_max = 1.e12
+    nu_ratio_limit = 1.e12
     Theta_e_min = 0.3
 
     nuc = EE * B / (2. * np.pi * ME * CL)
     nus = (2. / 9.) * nuc * Theta_e**2 * jnp.sin(pitch_angle)
     X = nu / nus
 
-    var = jnp.exp(- X**(1/3))
+    var = jnp.exp(- X**(1./3))
     term = jnp.sqrt(X) + 2.0**(11./12) * X**(1./6)
 
     emissivity = Ne * nus * term**2 / (2.*Theta_e**2.)  # approximation for K2
     emissivity = emissivity * var * jnp.sqrt(2) * jnp.pi * EE**2 / (3.0 * CL)
 
-    emissivity = emissivity.at[nu > nu_max].set(0)
+    emissivity = emissivity.at[X > nu_ratio_limit].set(0)
     emissivity = emissivity.at[Theta_e < Theta_e_min].set(0)
 
     # we assume jax is using float32, so we need to expand
