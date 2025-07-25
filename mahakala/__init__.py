@@ -19,6 +19,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import jax
+jax.config.update('jax_enable_x64', True)
+
 from mahakala.geodesics import find_shadow_bisection
 from mahakala.geodesics import find_shadow_bisection_angles
 from mahakala.geodesics import geodesic_integrator
