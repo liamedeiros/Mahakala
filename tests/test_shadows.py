@@ -22,11 +22,16 @@ THE SOFTWARE.
 
 import numpy as np
 import mahakala as ma
+import os
 
 
 def test_kerr_cks():
 
-    saved_shadows = np.load("data/shadow_data.npy", allow_pickle=True).item()
+    file_path = os.path.join(os.path.dirname(__file__), 'data')
+    file_path = os.path.join(file_path, 'shadow_data.npy')
+    file_path = os.path.abspath(file_path)
+
+    saved_shadows = np.load(file_path, allow_pickle=True).item()
 
     for key in saved_shadows.keys():
 
