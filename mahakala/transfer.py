@@ -57,7 +57,7 @@ def solve_specific_intensity(emissivity, absorptivity, dt, L_unit, dIs=False):
     if dIs:
         return lax.scan(solve_one_step_dIs, I_nu, jnp.arange(nsteps - 1, 0, -1))
 
-    return lax.scan(solve_one_step, I_nu, jnp.arange(nsteps - 1, 0, -1))
+    return lax.scan(solve_one_step, I_nu, jnp.arange(nsteps - 1, 0, -1))[0]
 
 
 def synchrotron_coefficients(Ne, Theta_e, B, pitch_angle, nu,
