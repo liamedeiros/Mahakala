@@ -114,9 +114,9 @@ def solve_specific_intensity(emissivity, absorptivity, dt, L_unit, dIs=False):
         return I_nu, dI
 
     if dIs:
-        return lax.scan(solve_one_step, I_nu, jnp.arange(nsteps - 1, 0, -1))
+        return lax.scan(solve_one_step_dIs, I_nu, jnp.arange(nsteps - 1, 0, -1))
 
-    return lax.scan(solve_one_step_dIs, I_nu, jnp.arange(nsteps - 1, 0, -1))[0]
+    return lax.scan(solve_one_step, I_nu, jnp.arange(nsteps - 1, 0, -1))[0]
 
 
 def solve_attenuated_emissivity(emissivity, absorptivity, dt, L_unit):
