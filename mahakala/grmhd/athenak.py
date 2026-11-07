@@ -401,19 +401,19 @@ class AthenakFluidModel(GRMHDFluidModel):
                                 if isinstance(source_i, int):
                                     copy_source_i += v1
                                 else:
-                                    source_i = slice(v1, nmbi+v1, 2)
+                                    copy_source_i = slice(v1, nmbi+v1, 2)
 
                                 copy_source_j = source_j
                                 if isinstance(source_j, int):
                                     copy_source_j += v2
                                 else:
-                                    source_j = slice(v2, nmbj+v2, 2)
+                                    copy_source_j = slice(v2, nmbj+v2, 2)
 
                                 copy_source_k = source_k
                                 if isinstance(source_k, int):
                                     copy_source_k += v3
                                 else:
-                                    source_k = slice(v3, nmbk+v3, 2)
+                                    copy_source_k = slice(v3, nmbk+v3, 2)
 
                                 contribution = uov[:, nmb, copy_source_k, copy_source_j, copy_source_i]
                                 new_meshblock[:nprim, target_k, target_j, target_i] += contribution / 8.
